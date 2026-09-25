@@ -1,0 +1,29 @@
+services:
+  diffrook:
+    build: .
+    image: diffrook:local
+    restart: unless-stopped
+    ports:
+      - "${DIFFROOK_BIND_ADDRESS:-127.0.0.1}:${DIFFROOK_PUBLISHED_PORT:-8080}:8080"
+    environment:
+      DIFFROOK_DATA_DIR: /data
+      DIFFROOK_WEB_DIR: /app/web
+      DIFFROOK_HOST: 0.0.0.0
+      DIFFROOK_PORT: 8080
+      DIFFROOK_SECURE_COOKIES: ${DIFFROOK_SECURE_COOKIES:-false}
+      RUST_LOG: ${RUST_LOG:-diffrook=info,tower_http=warn}
+    volumes:
+      - diffrook-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    stop_grace_period: 30s
+
+volumes:
+  diffrook-data:

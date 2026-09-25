@@ -1,0 +1,11 @@
+/target/
+/data/
+/web/node_modules/
+/web/dist/
+/.tools/
+/.qa/
+.env
+*.db
+*.db-shm
+*.db-wal
+*.tsbuildinfo
