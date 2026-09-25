@@ -1,6 +1,6 @@
 [package]
 name = "diffrook"
-version = "0.1.0"
+version = "0.1.1-rc.1"
 edition = "2021"
 description = "Self-hosted code review and repository automations"
 license = "CC-BY-NC-4.0"
@@ -31,6 +31,9 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 globset = "0.4"
+semver = "1"
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 tempfile = "3"

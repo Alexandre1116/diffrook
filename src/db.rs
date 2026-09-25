@@ -27,6 +27,7 @@ pub async fn open(path: &str) -> anyhow::Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS webhook_deliveries (connection_id TEXT NOT NULL, delivery_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(connection_id,delivery_id))",
         "CREATE TABLE IF NOT EXISTS scheduler_marks (automation_id TEXT PRIMARY KEY, last_slot TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS scheduler_marks_v2 (automation_id TEXT NOT NULL, repository TEXT NOT NULL, last_slot TEXT NOT NULL, PRIMARY KEY(automation_id,repository))",
+        "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
     ] {
         sqlx::query(sql).execute(&pool).await.context("initialize SQLite schema")?;
     }

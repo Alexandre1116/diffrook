@@ -4,17 +4,22 @@ use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let data_dir = std::env::var("DIFFROOK_DATA_DIR").unwrap_or_else(|_| "./data".into());
+    if diffrook::updates::exec_active(std::path::Path::new(&data_dir))? {
+        unreachable!();
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
-    let data_dir = std::env::var("DIFFROOK_DATA_DIR").unwrap_or_else(|_| "./data".into());
     let state = diffrook::core::AppState::new(data_dir).await?;
+    diffrook::updates::start(state.clone());
     diffrook::routes::start_worker(state.clone());
     diffrook::scheduler::start(state.clone());
     let web_dir = std::env::var("DIFFROOK_WEB_DIR").unwrap_or_else(|_| "./web/dist".into());
     let index = std::path::Path::new(&web_dir).join("index.html");
+    let restart_state = state.clone();
     let app: Router = diffrook::routes::router(state)
         .fallback_service(ServeDir::new(&web_dir).not_found_service(ServeFile::new(index)))
         .layer(tower_http::limit::RequestBodyLimitLayer::new(
@@ -28,10 +33,16 @@ async fn main() -> anyhow::Result<()> {
         .unwrap_or(8080);
     let addr: SocketAddr = format!("{host}:{port}").parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    diffrook::updates::confirm_active(std::path::Path::new(
+        &std::env::var("DIFFROOK_DATA_DIR").unwrap_or_else(|_| "./data".into()),
+    ))?;
     tracing::info!("Diffrook listening on {addr}");
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(async move { tokio::select! { _ = shutdown_signal() => {}, _ = diffrook::updates::restart_signal(&restart_state) => {} } })
         .await?;
+    diffrook::updates::exec_active(std::path::Path::new(
+        &std::env::var("DIFFROOK_DATA_DIR").unwrap_or_else(|_| "./data".into()),
+    ))?;
     Ok(())
 }
 

@@ -9,3 +9,4 @@ pub mod routes;
 pub mod scheduler;
 pub mod scm;
 pub mod types;
+pub mod updates;

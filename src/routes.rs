@@ -25,6 +25,15 @@ pub fn router(state: AppState) -> Router {
         .route("/api/login", post(auth::login))
         .route("/api/logout", post(auth::logout))
         .route("/api/dashboard", get(dashboard))
+        .route("/api/updates", get(crate::updates::api))
+        .route(
+            "/api/updates/policy",
+            axum::routing::post(crate::updates::set_policy),
+        )
+        .route(
+            "/api/updates/apply",
+            axum::routing::post(crate::updates::apply),
+        )
         .route(
             "/api/connections",
             get(list_connections).post(create_connection),
@@ -64,7 +73,7 @@ async fn api_not_found() -> Response {
 
 // Axum handlers return the response directly; boxing here would add an allocation per rejection.
 #[allow(clippy::result_large_err)]
-async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Result<(), Response> {
+pub(crate) async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Result<(), Response> {
     match auth::authenticate(state, h).await {
         Ok(Some(_)) => {}
         Ok(None) => return Err(error(StatusCode::UNAUTHORIZED, "Authentication required")),

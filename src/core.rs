@@ -28,6 +28,9 @@ pub struct AppState {
         tokio::sync::Mutex<std::collections::HashMap<String, tokio::sync::watch::Sender<bool>>>,
     >,
     pub login_failures: Arc<tokio::sync::Mutex<std::collections::HashMap<String, (u32, i64)>>>,
+    pub updates: Arc<tokio::sync::RwLock<Value>>,
+    pub restart: tokio::sync::watch::Sender<bool>,
+    pub update_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AppState {
@@ -83,6 +86,7 @@ impl AppState {
             .redirect(reqwest::redirect::Policy::none())
             .timeout(std::time::Duration::from_secs(30))
             .build()?;
+        let (restart, _) = tokio::sync::watch::channel(false);
         Ok(Self {
             db,
             key: Arc::new(key),
@@ -91,6 +95,11 @@ impl AppState {
             data_dir,
             cancellations: Arc::new(tokio::sync::Mutex::new(Default::default())),
             login_failures: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            updates: Arc::new(tokio::sync::RwLock::new(
+                json!({"current_version":env!("CARGO_PKG_VERSION"),"releases":[],"checked_at":null,"error":null}),
+            )),
+            restart,
+            update_lock: Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 

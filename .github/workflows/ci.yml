@@ -2,10 +2,13 @@ name: CI
 on:
   push:
   pull_request:
+  release:
+    types: [published]
 permissions:
   contents: read
 jobs:
   checks:
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -23,3 +26,39 @@ jobs:
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
       - run: docker build -t diffrook:test .
+
+  release-package:
+    if: github.event_name == 'release' && github.event.action == 'published'
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci && npm run build
+        working-directory: web
+      - run: |
+          version=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
+          test "v$version" = "$GITHUB_REF_NAME"
+      - run: docker build --target server -t diffrook-release-builder:latest .
+      - run: |
+          mkdir -p bundle/web
+          cid=$(docker create diffrook-release-builder:latest)
+          docker cp "$cid:/diffrook" bundle/diffrook
+          docker rm "$cid"
+          cp -R web/dist/. bundle/web/
+          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web
+          gh release upload "$GITHUB_REF_NAME" "diffrook-linux-${{ matrix.arch }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

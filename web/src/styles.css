@@ -2451,3 +2451,6 @@ button:disabled {
     padding-right: 7px;
   }
 }
+.release-panel{display:flex;align-items:center;justify-content:space-between;gap:32px;margin:24px 0;padding:24px 26px;border:1px solid var(--line);background:linear-gradient(120deg,#fff 0%,#f5f7f1 100%)}
+.release-copy{min-width:0}.release-copy h2{margin:8px 0 6px;font-size:21px;letter-spacing:-.03em}.release-copy p{max-width:700px;margin:0;color:var(--muted);font-size:13px;line-height:1.6}.release-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.release-list a{display:inline-flex;gap:7px;align-items:center;padding:5px 9px;border:1px solid var(--line);border-radius:7px;color:var(--ink);text-decoration:none;font:600 11px var(--mono)}.release-list a span{color:#946620;font:600 9px var(--sans);text-transform:uppercase;letter-spacing:.04em}.release-list small{color:var(--muted)}.release-controls{width:230px;flex:none;display:grid;gap:10px}.release-controls label{display:grid;gap:6px;color:var(--muted);font-size:11px;font-weight:600}.release-controls select{width:100%}.release-controls>small{color:var(--muted);font-size:10px;line-height:1.5}
+@media(max-width:760px){.release-panel{align-items:stretch;flex-direction:column;gap:18px}.release-controls{width:auto}}

@@ -111,6 +111,15 @@ try {
     assert.equal((await api('/api/status')).authenticated, true);
     await api('/api/setup', 'POST', { username: 'another', password: 'Diffrook-test-password-123', setup_token: process.env.DIFFROOK_TEST_SETUP_TOKEN || 'smoke-setup-token' }, { status: 409 });
   });
+  await check('Manual and automatic update policy', async () => {
+    const updates = await api('/api/updates');
+    assert.equal(updates.current_version, (await api('/api/status')).version);
+    assert.equal(updates.policy, 'manual');
+    assert.ok(Array.isArray(updates.releases));
+    assert.equal((await api('/api/updates/policy', 'POST', { mode: 'automatic' })).mode, 'automatic');
+    assert.equal((await api('/api/updates', 'GET')).policy, 'automatic');
+    assert.equal((await api('/api/updates/policy', 'POST', { mode: 'manual' })).mode, 'manual');
+  });
   await check('CRUD, CSRF and masked credentials', async () => {
     await api('/api/connections', 'POST', {}, { headers: { 'x-diffrook-request': '' }, status: 403 });
     gh = await api('/api/connections', 'POST', { name: 'Mock GitHub', kind: 'github', base_url: mockOrigin, token, webhook_secret: secret, bot_username: 'diffrook-bot' });

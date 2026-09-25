@@ -173,3 +173,48 @@ async fn setup_token_cannot_register_a_second_administrator() {
         StatusCode::CONFLICT
     );
 }
+
+#[tokio::test]
+async fn update_policy_is_authenticated_and_persisted() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    assert_eq!(
+        request(&app, "GET", "/api/updates", None, None).await.0,
+        StatusCode::UNAUTHORIZED
+    );
+    let cookie = admin(&app, &state).await;
+    let (status, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(updates["policy"], "manual");
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/updates/policy",
+            Some(json!({"mode":"automatic"})),
+            Some(&cookie)
+        )
+        .await
+        .0,
+        StatusCode::OK
+    );
+    let saved: String =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key='updates.policy'")
+            .fetch_one(&state.db)
+            .await
+            .unwrap();
+    assert_eq!(saved, "automatic");
+    assert_eq!(
+        request(
+            &app,
+            "POST",
+            "/api/updates/policy",
+            Some(json!({"mode":"surprise"})),
+            Some(&cookie)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+}

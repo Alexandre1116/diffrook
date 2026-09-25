@@ -157,12 +157,14 @@ function App() {
       connections: Obj[];
       providers: Obj[];
       runs: Obj[];
+      updates: Obj;
     }>({
       dashboard: {},
       automations: [],
       connections: [],
       providers: [],
       runs: [],
+      updates: { releases: [], policy: "manual" },
     });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -175,15 +177,16 @@ function App() {
     if (!status?.authenticated) return;
     setBusy(true);
     try {
-      const [dashboard, automations, connections, providers, runs] =
+      const [dashboard, automations, connections, providers, runs, updates] =
         await Promise.all([
           api("/dashboard"),
           api("/automations"),
           api("/connections"),
           api("/providers"),
           api("/runs"),
+          api("/updates"),
         ]);
-      setData({ dashboard, automations, connections, providers, runs });
+      setData({ dashboard, automations, connections, providers, runs, updates });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -399,6 +402,24 @@ function App() {
               openRun={runDetail}
               refresh={reload}
               version={status.version}
+              updates={data.updates}
+              updatePolicy={async (mode) => {
+                try {
+                  await api("/updates/policy", "POST", { mode });
+                  await reload();
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+              applyUpdate={async (tag) => {
+                try {
+                  await api("/updates/apply", "POST", { tag });
+                  setNotice("Update installed. Reconnecting to Diffrook…");
+                  window.setTimeout(() => window.location.reload(), 2500);
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
             />
           )}
           {page === "automations" && (
@@ -720,6 +741,9 @@ function Overview({
   openRun,
   refresh,
   version,
+  updates,
+  updatePolicy,
+  applyUpdate,
 }: {
   data: any;
   busy: boolean;
@@ -727,9 +751,14 @@ function Overview({
   openRun: (r: Obj) => void;
   refresh: () => void;
   version: string;
+  updates: Obj;
+  updatePolicy: (mode: string) => Promise<void>;
+  applyUpdate: (tag: string) => Promise<void>;
 }) {
   const d = data.dashboard;
   const latest = (d.recent_runs || data.runs).slice(0, 5);
+  const [updating, setUpdating] = useState(false);
+  const release = (updates.releases || []).find((r: Obj) => r.newer);
   return (
     <>
       <div className="page-head">
@@ -792,6 +821,27 @@ function Overview({
           <small>Version {version}</small>
         </div>
       </div>
+      <section className="panel-card release-panel">
+        <div className="release-copy">
+          <div className="eyebrow">DIFFROOK RELEASES</div>
+          <h2>{release ? `Version ${release.version} is available` : "Version updates"}</h2>
+          <p>{release ? `${release.prerelease ? "Pre-release" : "Release"} published ${date(release.published_at)}. ${release.supported ? "A compatible Linux package is ready." : "No update package for this platform yet."}` : `You are running the latest version, ${version}.`}</p>
+          <div className="release-list">
+            {(updates.releases || []).slice(0, 4).map((item: Obj) => <a key={item.tag} href={item.url} target="_blank" rel="noreferrer">{item.version}{item.prerelease && <span>Pre-release</span>}</a>)}
+            {!(updates.releases || []).length && <small>{updates.error || "Checking GitHub for published releases…"}</small>}
+          </div>
+        </div>
+        <div className="release-controls">
+          <label>Update policy
+            <select value={updates.policy || "manual"} onChange={(e) => void updatePolicy(e.target.value)}>
+              <option value="manual">Manual updates</option>
+              <option value="automatic">Automatic updates</option>
+            </select>
+          </label>
+          {release && <button className="btn primary" disabled={updating || !release.supported} onClick={async () => { setUpdating(true); try { await applyUpdate(release.tag); } finally { setUpdating(false); } }}><ArrowDownRight size={15} />{updating ? "Updating…" : "Install update"}</button>}
+          <small>Automatic updates download and restart this Linux container. Back up /data first.</small>
+        </div>
+      </section>
       <div className="section-heading">
         <div>
           <h2>Recent runs</h2>
