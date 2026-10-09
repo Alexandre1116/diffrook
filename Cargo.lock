@@ -573,6 +573,7 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "cron",
+ "ed25519-dalek",
  "flate2",
  "globset",
  "hex",

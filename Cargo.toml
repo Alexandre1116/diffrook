@@ -3,7 +3,7 @@ name = "diffrook"
 version = "0.1.1-rc.1"
 edition = "2021"
 description = "Self-hosted code review and repository automations"
-license = "CC-BY-NC-4.0"
+license-file = "LICENSE"
 publish = false
 
 [dependencies]
@@ -27,6 +27,7 @@ hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"
 openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+ed25519-dalek = "2"
 tower-http = { version = "0.6", features = ["fs", "trace", "limit", "set-header"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

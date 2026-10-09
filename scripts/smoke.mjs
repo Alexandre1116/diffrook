@@ -163,12 +163,25 @@ try {
     assert.ok(!modelBody.includes(token) && !modelBody.includes(modelKey) && !modelBody.includes('NEVER_SEND_THIS_SECRET'));
     assert.ok(!traffic.some(t => t.method !== 'GET' && t.path.includes('/git/')));
   });
+  await check('Individual plan limits automation creation to three', async () => {
+    const first = await api('/api/automations', 'POST', automation(gh.id, provider.id, { name: 'Quota probe 1', enabled: false }));
+    const second = await api('/api/automations', 'POST', automation(gh.id, provider.id, { name: 'Quota probe 2' }));
+    await api('/api/automations', 'POST', automation(gh.id, provider.id), { status: 403 });
+    const license = await api('/api/license');
+    assert.equal(license.edition, 'individual');
+    assert.equal(license.usage.users, 1);
+    assert.equal(license.usage.automations, 3);
+    assert.equal(license.can_create_automation, false);
+    await api(`/api/automations/${first.id}`, 'DELETE');
+    await api(`/api/automations/${second.id}`, 'DELETE');
+  });
   await check('Forgejo review uses the Forgejo diff endpoint', async () => {
     const a = await api('/api/automations', 'POST', automation(forgejo.id, provider.id, { name: 'Forgejo review' }));
     const queued = await api(`/api/automations/${a.id}/run`, 'POST', { kind: 'pull_request', repository: 'acme/demo', number: 7 });
     const run = await waitForRun(queued.id);
     assert.equal(run.status, 'succeeded', run.error);
     assert.ok(traffic.some(t => t.path.endsWith('/pulls/7.diff')));
+    await api(`/api/automations/${a.id}`, 'DELETE');
   });
   for (const c of [() => gh, () => forgejo]) {
     await check(`${c() === gh ? 'GitHub' : 'Forgejo'} issue to fix PR`, async () => {
@@ -179,6 +192,7 @@ try {
       assert.match(run.output.artifacts.pull_request_url, /pull\/10$/);
       const pr = traffic.findLast(t => t.method === 'POST' && t.path.endsWith('/pulls'));
       assert.equal(pr.body.base, 'main'); assert.match(pr.body.head, /^diffrook\//);
+      await api(`/api/automations/${a.id}`, 'DELETE');
     });
   }
   for (const kind of ['ollama', 'anthropic']) {
@@ -188,6 +202,7 @@ try {
       const a = await api('/api/automations', 'POST', automation(gh.id, p.id, { name: `${kind} audit`, action: 'audit', notifications: [] }));
       const run = await waitForRun((await api(`/api/automations/${a.id}/run`, 'POST', { kind: 'repository', repository: 'acme/demo', branch: 'main' })).id);
       assert.equal(run.status, 'succeeded', run.error);
+      await api(`/api/automations/${a.id}`, 'DELETE');
     });
   }
   await check('Webhook signature and replay protection', async () => {

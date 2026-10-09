@@ -88,3 +88,31 @@ pub async fn delete_object(pool: &SqlitePool, kind: &str, id: &str) -> anyhow::R
         .rows_affected()
         > 0)
 }
+
+pub async fn create_automation(
+    pool: &SqlitePool,
+    value: &Value,
+    limit: Option<u32>,
+) -> anyhow::Result<bool> {
+    // A single write statement serializes competing creations in SQLite.
+    Ok(sqlx::query("INSERT INTO objects(kind,id,body,created_at,updated_at) SELECT 'automations',?,?,?,? WHERE (? IS NULL OR (SELECT COUNT(*) FROM objects WHERE kind='automations') < ?)")
+        .bind(value["id"].as_str().context("object id missing")?)
+        .bind(serde_json::to_string(value)?)
+        .bind(value["created_at"].as_str().context("created_at missing")?)
+        .bind(value["updated_at"].as_str().context("updated_at missing")?)
+        .bind(limit.map(i64::from)).bind(limit.map(i64::from)).execute(pool).await?.rows_affected() == 1)
+}
+
+pub async fn update_automation(pool: &SqlitePool, value: &Value) -> anyhow::Result<bool> {
+    // An edit cannot recreate an object deleted after the handler read it.
+    Ok(
+        sqlx::query("UPDATE objects SET body=?,updated_at=? WHERE kind='automations' AND id=?")
+            .bind(serde_json::to_string(value)?)
+            .bind(value["updated_at"].as_str().context("updated_at missing")?)
+            .bind(value["id"].as_str().context("object id missing")?)
+            .execute(pool)
+            .await?
+            .rows_affected()
+            == 1,
+    )
+}

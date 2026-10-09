@@ -8,7 +8,7 @@ RUN npm run build
 
 FROM rust:1-bookworm AS server
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock LICENSE ./
 COPY src ./src
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
     && chmod 700 /data
 COPY --from=server /diffrook /usr/local/bin/diffrook
 COPY --from=web /build/web/dist /app/web
+COPY LICENSE /app/LICENSE
+COPY docs/licenses/ /app/licenses/
 ENV DIFFROOK_DATA_DIR=/data \
     DIFFROOK_WEB_DIR=/app/web \
     DIFFROOK_HOST=0.0.0.0 \

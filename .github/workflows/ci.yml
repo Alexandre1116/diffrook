@@ -21,6 +21,7 @@ jobs:
         working-directory: web
       - run: npm run build
         working-directory: web
+      - run: node --test scripts/license.test.mjs
       - run: rustup component add rustfmt clippy
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
@@ -81,7 +82,10 @@ jobs:
           docker cp "$cid:/diffrook" bundle/diffrook
           docker rm "$cid"
           cp -R web/dist/. bundle/web/
-          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web
+          cp LICENSE bundle/LICENSE
+          mkdir -p bundle/licenses
+          cp docs/licenses/CC-BY-NC-4.0.txt bundle/licenses/
+          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web LICENSE licenses
           gh release upload "$GITHUB_REF_NAME" "diffrook-linux-${{ matrix.arch }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}

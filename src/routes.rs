@@ -33,6 +33,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/oidc/start", get(crate::sso::start))
         .route("/api/auth/oidc/callback", get(crate::sso::callback))
         .route("/api/dashboard", get(dashboard))
+        .route("/api/license", get(license_status))
         .route("/api/updates", get(crate::updates::api))
         .route(
             "/api/updates/policy",
@@ -123,6 +124,15 @@ pub(crate) async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Re
 async fn status(State(s): State<AppState>, h: HeaderMap) -> Response {
     let setup = s.security.local_login && auth::is_setup_required(&s).await.unwrap_or(true);
     Json(json!({"setup_required":setup,"authenticated":auth::authenticate(&s,&h).await.ok().flatten().is_some(),"version":env!("CARGO_PKG_VERSION"),"sso_enabled":s.security.oidc.is_some(),"local_login_enabled":s.security.local_login})).into_response()
+}
+async fn license_status(State(s): State<AppState>, h: HeaderMap) -> Response {
+    if let Err(r) = guard(&s, &h, false).await {
+        return r;
+    }
+    match s.license.status(&s.db).await {
+        Ok(status) => Json(status).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
 }
 async fn list_objects(s: &AppState, h: &HeaderMap, kind: &str) -> Response {
     if let Err(r) = guard(s, h, false).await {
@@ -568,7 +578,19 @@ async fn object_write(
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
     let mut result = v.clone();
-    if let Err(e) = db::save_object(&s.db, kind, &v).await {
+    if kind == "automations" {
+        let saved = if is_create {
+            db::create_automation(&s.db, &v, s.license.limits().automations).await
+        } else {
+            db::update_automation(&s.db, &v).await
+        };
+        match saved {
+            Ok(true) => (),
+            Ok(false) if is_create => return error(StatusCode::FORBIDDEN, "Automation limit reached for this plan. Delete an automation or install a Business license."),
+            Ok(false) => return error(StatusCode::NOT_FOUND, "Automation not found"),
+            Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
+        }
+    } else if let Err(e) = db::save_object(&s.db, kind, &v).await {
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
     if let Err(e) = s.mask(kind, &mut result) {

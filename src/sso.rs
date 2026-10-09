@@ -189,9 +189,14 @@ pub async fn callback(
             );
             response
         }
-        Err(_) => {
+        Err(e) => {
             tracing::warn!("SSO login rejected");
-            Redirect::to("/?sso_error=failed").into_response()
+            Redirect::to(if e.is::<crate::licensing::UserLimitReached>() {
+                "/?sso_error=user_limit"
+            } else {
+                "/?sso_error=failed"
+            })
+            .into_response()
         }
     };
     response.headers_mut().append(
@@ -297,12 +302,17 @@ async fn provision(
     } else {
         let uuid = uuid::Uuid::new_v4();
         let id = uuid.to_string();
-        sqlx::query("INSERT INTO users(id,username,password_hash,created_at) VALUES(?,?,'',?)")
+        let limit = state.license.limits().users.map(i64::from);
+        let inserted = sqlx::query("INSERT INTO users(id,username,password_hash,created_at) SELECT ?,?,'',? WHERE (? IS NULL OR (SELECT COUNT(*) FROM users) < ?)")
             .bind(&id)
             .bind(format!("sso.{}", uuid.simple()))
             .bind(chrono::Utc::now().to_rfc3339())
+            .bind(limit).bind(limit)
             .execute(&mut *tx)
             .await?;
+        if inserted.rows_affected() != 1 {
+            anyhow::bail!(crate::licensing::UserLimitReached);
+        }
         sqlx::query("INSERT INTO sso_identities(issuer,subject,user_id) VALUES(?,?,?)")
             .bind(&config.issuer)
             .bind(subject)
@@ -694,7 +704,10 @@ mod tests {
 
     #[tokio::test]
     async fn provisioning_uses_subject_identity_without_linking_existing_local_accounts() {
-        let fixture = fixture(vec![]).await;
+        let mut fixture = fixture(vec![]).await;
+        fixture.state.license = Arc::new(crate::licensing::License::business_for_tests(
+            fixture.state.license.installation_id,
+        ));
         sqlx::query("INSERT INTO users(id,username,password_hash,created_at) VALUES('local-admin','admin','unused','now')").execute(&fixture.state.db).await.unwrap();
         let config = fixture.state.security.oidc.as_ref().unwrap();
         let a = provision(
@@ -723,5 +736,81 @@ mod tests {
             .await
             .unwrap();
         assert!(password.is_empty());
+    }
+
+    #[tokio::test]
+    async fn individual_limits_new_sso_users_but_allows_existing_identity_to_sign_in() {
+        let fixture = fixture(vec![]).await;
+        let config = fixture.state.security.oidc.as_ref().unwrap();
+        let user = provision(&fixture.state, config, "personal", None, false)
+            .await
+            .unwrap();
+        assert_eq!(
+            provision(&fixture.state, config, "personal", None, false)
+                .await
+                .unwrap(),
+            user
+        );
+        let rejected = provision(&fixture.state, config, "second", None, false)
+            .await
+            .unwrap_err();
+        assert!(rejected.is::<crate::licensing::UserLimitReached>());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&fixture.state.db)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn local_account_uses_the_individual_user_slot_and_sso_cannot_bypass_it() {
+        let fixture = fixture(vec![]).await;
+        sqlx::query("INSERT INTO users(id,username,password_hash,created_at) VALUES('local','personal','unused','now')").execute(&fixture.state.db).await.unwrap();
+        let error = provision(
+            &fixture.state,
+            fixture.state.security.oidc.as_ref().unwrap(),
+            "personal-subject",
+            None,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.is::<crate::licensing::UserLimitReached>());
+    }
+
+    #[tokio::test]
+    async fn concurrent_sso_provisioning_cannot_create_multiple_individual_users() {
+        let fixture = fixture(vec![]).await;
+        let mut pending = tokio::task::JoinSet::new();
+        for n in 0..8 {
+            let state = fixture.state.clone();
+            pending.spawn(async move {
+                provision(
+                    &state,
+                    state.security.oidc.as_ref().unwrap(),
+                    &format!("user-{n}"),
+                    None,
+                    false,
+                )
+                .await
+            });
+        }
+        let mut created = 0;
+        while let Some(result) = pending.join_next().await {
+            if result.unwrap().is_ok() {
+                created += 1;
+            }
+        }
+        assert_eq!(created, 1);
+        let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&fixture.state.db)
+            .await
+            .unwrap();
+        let identities: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sso_identities")
+            .fetch_one(&fixture.state.db)
+            .await
+            .unwrap();
+        assert_eq!(users, 1);
+        assert_eq!(identities, 1);
     }
 }

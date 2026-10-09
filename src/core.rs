@@ -28,6 +28,7 @@ pub struct AppState {
     pub restart: tokio::sync::watch::Sender<bool>,
     pub update_lock: Arc<tokio::sync::Mutex<()>>,
     pub security: Arc<crate::security::SecurityConfig>,
+    pub license: Arc<crate::licensing::License>,
     pub rate_limiter: Arc<tokio::sync::Mutex<crate::security::RateLimiter>>,
     pub password_slots: Arc<tokio::sync::Semaphore>,
     pub dummy_password_hash: Arc<String>,
@@ -80,6 +81,7 @@ impl AppState {
         };
         let db_path = data_dir.join("diffrook.sqlite");
         let db = crate::db::open(db_path.to_str().context("database path is not UTF-8")?).await?;
+        let license = crate::licensing::License::load(&db).await?;
         let setup_token = if !security.local_login {
             String::new()
         } else if let Some(token) = std::env::var("DIFFROOK_SETUP_TOKEN")
@@ -127,6 +129,7 @@ impl AppState {
             restart,
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
             security: Arc::new(security),
+            license: Arc::new(license),
             rate_limiter: Arc::new(tokio::sync::Mutex::new(Default::default())),
             password_slots: Arc::new(tokio::sync::Semaphore::new(2)),
             dummy_password_hash: Arc::new(dummy_password_hash),

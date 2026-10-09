@@ -167,6 +167,7 @@ function App() {
       notificationProviders: Obj[];
       runs: Obj[];
       updates: Obj;
+      license: Obj | null;
     }>({
       dashboard: {},
       automations: [],
@@ -175,6 +176,7 @@ function App() {
       notificationProviders: [],
       runs: [],
       updates: { releases: [], policy: "manual" },
+      license: null,
     });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -189,7 +191,7 @@ function App() {
     if (!status?.authenticated) return;
     setBusy(true);
     try {
-      const [dashboard, automations, connections, providers, notificationProviders, runs, updates] =
+      const [dashboard, automations, connections, providers, notificationProviders, runs, updates, license] =
         await Promise.all([
           api("/dashboard"),
           api("/automations"),
@@ -198,8 +200,9 @@ function App() {
           api("/notification-providers"),
           api("/runs"),
           api("/updates"),
+          api("/license"),
         ]);
-      setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates });
+      setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates, license });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -208,7 +211,9 @@ function App() {
   }, [status?.authenticated]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
-      setError("SSO sign-in failed. Your account may not be authorized. Try again or contact your administrator.");
+      setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
+        ? "This installation's user limit has been reached. Contact your administrator about a Business license."
+        : "SSO sign-in failed. Your account may not be authorized. Try again or contact your administrator.");
       window.history.replaceState({}, "", window.location.pathname);
     }
     api<Status>("/status")
@@ -273,6 +278,13 @@ function App() {
     } catch (e) {
       setError((e as Error).message);
     }
+  };
+  const createAutomation = () => {
+    if (data.license?.can_create_automation === false) {
+      setError("Automation limit reached. Delete an automation or install a Business license. See Settings for plan details.");
+      return;
+    }
+    setModal({ kind: "automation", item: blankAutomation() });
   };
   const login = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -481,11 +493,10 @@ function App() {
               items={data.automations}
               connections={data.connections}
               providers={data.providers}
+              canCreate={data.license?.can_create_automation !== false}
               query={query}
               setQuery={setQuery}
-              create={() =>
-                setModal({ kind: "automation", item: blankAutomation() })
-              }
+              create={createAutomation}
               edit={(item) => setModal({ kind: "automation", item })}
               run={(item) => setModal({ kind: "run", item })}
               remove={(item) =>
@@ -1173,6 +1184,7 @@ function AutomationPage({
   query,
   setQuery,
   create,
+  canCreate,
   edit,
   run,
   remove,
@@ -1183,6 +1195,7 @@ function AutomationPage({
   query: string;
   setQuery: (s: string) => void;
   create: () => void;
+  canCreate: boolean;
   edit: (o: Obj) => void;
   run: (o: Obj) => void;
   remove: (o: Obj) => void;
@@ -1206,11 +1219,12 @@ function AutomationPage({
             Define when Diffrook should inspect or update your repositories.
           </p>
         </div>
-        <button className="btn primary" onClick={create}>
+        <button className="btn primary" onClick={create} disabled={!canCreate} title={!canCreate ? "Plan limit reached. See Settings." : undefined}>
           <Plus size={16} />
           New automation
         </button>
       </div>
+      {!canCreate && <div className="notice-strip"><ShieldCheck size={17} /><span>Your plan's automation limit is reached. Disabled automations also count. Delete one or install a Business license. Plan details are in Settings.</span></div>}
       <div className="toolbar">
         <div className="searchbox">
           <Search size={16} />
@@ -1667,6 +1681,22 @@ function SettingsPage({
         </div>
       </div>
       <div className="settings-grid">
+        {data.license && <section className="panel-card setting-panel wide-setting">
+          <div className="setting-icon"><KeyRound size={19} /></div>
+          <div>
+            <h3>{data.license.edition === "business" ? "Business plan" : "Individual plan"}</h3>
+            <p>{data.license.edition === "business" ? "Paid self-hosted license. Allowances follow your commercial agreement." : "Free for personal, noncommercial use. Companies, teams and professional work require a Business license."}</p>
+            <div className="settings-line"><span>Users</span><b>{data.license.usage.users} / {data.license.limits.users ?? "Unlimited"}</b></div>
+            <div className="settings-line"><span>Saved automations</span><b>{data.license.usage.automations} / {data.license.limits.automations ?? "Unlimited"}</b></div>
+            <div className="settings-line"><span>License status</span><b>{data.license.license_status.replaceAll("_", " ")}</b></div>
+            {data.license.customer && <div className="settings-line"><span>Licensed to</span><b>{data.license.customer}</b></div>}
+            {data.license.expires_at && <div className="settings-line"><span>Expires</span><b>{date(new Date(data.license.expires_at * 1000).toISOString())}</b></div>}
+            <div className="settings-line"><span>Installation ID</span><code>{data.license.installation_id}</code></div>
+            {data.license.over_limit && <p role="alert">Existing data exceeds this plan's limits. It is retained for editing, deletion and export. Additional creations are blocked at the applicable limit.</p>}
+            <p>Disabled automations count. To activate Business, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart.</p>
+            <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
+          </div>
+        </section>}
         <section className="panel-card setting-panel">
           <div className="setting-icon">
             <ShieldCheck size={19} />

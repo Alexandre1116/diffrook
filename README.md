@@ -88,6 +88,17 @@ This is the first implementation. GitHub and Forgejo are the initial platforms. 
 
 Copyright 2026 Alexandre Ramos and Diffrook contributors.
 
-Diffrook is source-available under [Creative Commons Attribution-NonCommercial 4.0 International](https://creativecommons.org/licenses/by-nc/4.0/). Attribute the project and its authors, link the license, and identify modifications. Commercial use is not permitted under this license. See [LICENSE](LICENSE) for the full terms. Third-party dependencies retain their respective licenses.
+Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
+The free Individual plan permits personal, noncommercial self-hosted use with
+**one user and three saved automations**, including disabled automations. Company,
+team, employment, freelance and other professional use requires a paid Business
+license, even with one user. Business installations use an offline signed license
+file with the allowances agreed with the customer.
 
-The noncommercial restriction means this project is not OSI open source. Creative Commons [recommends software-specific licenses for software](https://creativecommons.org/faq/#can-i-apply-a-creative-commons-license-to-software); CC BY-NC 4.0 is the project owner's chosen license.
+A future subscription hosted by the project owner will have separate service terms;
+it is not currently included with a self-hosted license. Third-party hosting or
+resale requires separate written authorization. See [plans and license installation](docs/licensing.md).
+
+These terms are not an OSI open-source license. Rights already granted for
+earlier CC BY-NC 4.0 material remain intact; its [original license](docs/licenses/CC-BY-NC-4.0.txt)
+is retained. Third-party dependencies keep their respective licenses.
