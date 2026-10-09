@@ -4,7 +4,7 @@
   "annual_months_charged": 10,
   "self_hosted": [
     {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":0,"annual_eur":0,"per_user":false,"free_forever":true},
-    {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":true,"commercial_use":true,"monthly_eur":9,"annual_eur":90,"per_user":false},
+    {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":false,"commercial_use":true,"monthly_eur":9,"annual_eur":90,"per_user":false},
     {"id":"teams","name":"Teams","users":5,"automations":20,"sso":true,"commercial_use":true,"monthly_eur":29,"annual_eur":290,"per_user":false},
     {"id":"enterprise","name":"Enterprise","users":null,"min_users":10,"automations":null,"automations_per_user":10,"sso":true,"commercial_use":true,"monthly_eur":8,"annual_eur":80,"per_user":true}
   ],
@@ -16,7 +16,7 @@
     "byok":true,
     "plans":[
       {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":9,"annual_eur":90,"per_user":false,"executions_per_month":500},
-      {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":true,"commercial_use":true,"monthly_eur":19,"annual_eur":190,"per_user":false,"executions_per_month":2000},
+      {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":false,"commercial_use":true,"monthly_eur":19,"annual_eur":190,"per_user":false,"executions_per_month":2000},
       {"id":"teams","name":"Teams","users":5,"automations":20,"sso":true,"commercial_use":true,"monthly_eur":59,"annual_eur":590,"per_user":false,"executions_per_month":10000},
       {"id":"enterprise","name":"Enterprise","users":null,"min_users":10,"automations":null,"automations_per_user":10,"sso":true,"commercial_use":true,"monthly_eur":15,"annual_eur":150,"per_user":true,"executions_per_user_per_month":2000}
     ],

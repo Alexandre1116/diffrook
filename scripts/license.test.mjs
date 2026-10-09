@@ -18,6 +18,8 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
   await mkdir(join(directory, 'src'));
   await copyFile(new URL('./license.mjs', import.meta.url), join(directory, 'scripts/license.mjs'));
   await copyFile(new URL('../src/plans.json', import.meta.url), join(directory, 'src/plans.json'));
+  const catalog = JSON.parse(await readFile(join(directory, 'src/plans.json'), 'utf8'));
+  assert.deepEqual(catalog.self_hosted.map(p => [p.id, p.sso]), [['individual', false], ['freelancer', false], ['teams', true], ['enterprise', true]]);
   const run = (...args) => spawnSync(process.execPath, [join(directory, 'scripts/license.mjs'), ...args], { encoding: 'utf8', cwd: directory });
   assert.equal(run('init').status, 0);
   const originalKey = await readFile(join(directory, 'secrets/license-signing-key.pem'));

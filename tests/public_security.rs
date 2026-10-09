@@ -236,7 +236,10 @@ async fn sso_only_disables_setup_passwords_and_existing_local_sessions() {
     assert_eq!(body["setup_required"], false);
     assert_eq!(body["sso_enabled"], false);
     assert_eq!(body["sso_requires_license"], true);
-    assert_eq!(body["installation_id"], state.license.installation_id.to_string());
+    assert_eq!(
+        body["installation_id"],
+        state.license.installation_id.to_string()
+    );
     assert_eq!(body["local_login_enabled"], false);
 }
 

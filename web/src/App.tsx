@@ -220,7 +220,7 @@ function App() {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
         ? "This installation's user limit has been reached. Contact your administrator about the paid plan's allowance."
         : new URLSearchParams(window.location.search).get("sso_error") === "plan_required"
-        ? "SSO requires an active Freelancer, Teams or Enterprise license. Existing identities can still sign in after a downgrade."
+        ? "SSO requires an active Teams or Enterprise license. Existing identities can still sign in after a downgrade."
         : "SSO sign-in failed. Your account may not be authorized. Try again or contact your administrator.");
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -781,7 +781,7 @@ function Auth({
           </a>
         )}
         {ssoRequiresLicense && <div className="auth-license-note" role="status">
-          <p>SSO requires an active Freelancer, Teams or Enterprise license. Ask the instance administrator to install a signed license.</p>
+          <p>SSO requires an active Teams or Enterprise license. Ask the instance administrator to install a signed license.</p>
           {!localLogin && <p>Installation ID: <code>{installationId}</code></p>}
           <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a>
         </div>}

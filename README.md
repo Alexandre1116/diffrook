@@ -97,7 +97,7 @@ even with one user. Paid self-hosted plans use offline signed, expiring licenses
 | Self-hosted plan | Users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
 | Individual | 1 | 3 | No | Free forever | Free |
-| Freelancer | 1 | 10 | Yes | EUR 9 | EUR 90 |
+| Freelancer | 1 | 10 | No | EUR 9 | EUR 90 |
 | Teams | 5 | 20 | Yes | EUR 29 | EUR 290 |
 | Enterprise | Minimum 10 | 10 per licensed user, pooled | Yes | EUR 8/user | EUR 80/user |
 

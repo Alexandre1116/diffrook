@@ -1,4 +1,4 @@
-Diffrook Personal and Business License 1.2
+Diffrook Personal and Business License 1.1
 
 Copyright 2026 Alexandre Ramos and Diffrook contributors.
 
@@ -11,9 +11,9 @@ versions distributed before the adoption of this license. The previous license
 is retained in docs/licenses/CC-BY-NC-4.0.txt. Third-party dependencies and other
 separately licensed material retain their respective licenses. This license
 grants only rights held by the applicable Diffrook copyright holders.
-Rights previously granted under Diffrook Personal and Business License 1.0 or
-1.1 and existing customer agreements remain effective for their covered material. The
-previous texts are retained in docs/licenses/.
+Rights previously granted under Diffrook Personal and Business License 1.0 and
+existing customer agreements remain effective for their covered material. The
+previous 1.0 text is retained in docs/licenses/Diffrook-Personal-Business-1.0.txt.
 
 Diffrook is source-available software. This license is not an OSI-approved
 open-source license. Viewing the source does not grant unrestricted commercial
@@ -54,7 +54,7 @@ perpetual entitlement, support level or unlimited allowance is promised here.
 
 The paid self-hosted subscription plans are:
 - Freelancer: one registered user and ten saved automations, for individual
-  professional use, with local sign-in and without SSO.
+  professional use, including SSO.
 - Teams: up to five registered users and twenty saved automations, including
   SSO and use within the licensed organization.
 - Enterprise: purchased registered users, with a minimum of ten, and ten saved

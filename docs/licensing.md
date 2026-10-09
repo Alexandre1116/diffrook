@@ -8,7 +8,7 @@ even for one user. Prices below are in EUR before applicable tax.
 | Self-hosted plan | Registered users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
 | Individual | 1 | 3 | No | Free forever | Free |
-| Freelancer | 1 | 10 | Yes | 9 | 90 |
+| Freelancer | 1 | 10 | No | 9 | 90 |
 | Teams | 5 | 20 | Yes | 29 | 290 |
 | Enterprise | Purchased seats, minimum 10 | 10 per purchased seat, pooled | Yes | 8/seat | 80/seat |
 
@@ -35,7 +35,7 @@ metering, hosted operations and billing are not available. All hosted plans are 
 | Planned Cloud plan | Users | Saved automations | SSO | Monthly | Annual | Executions/month |
 | --- | ---: | ---: | :---: | ---: | ---: | ---: |
 | Individual | 1 | 3 | No | 9 | 90 | 500 |
-| Freelancer | 1 | 10 | Yes | 19 | 190 | 2,000 |
+| Freelancer | 1 | 10 | No | 19 | 190 | 2,000 |
 | Teams | 5 | 20 | Yes | 59 | 590 | 10,000 |
 | Enterprise | Minimum 10 | 10 per seat, pooled | Yes | 15/seat | 150/seat | 2,000/seat |
 
@@ -103,28 +103,18 @@ activates a plan.
 
 ## SSO access and one-user installations
 
-New SSO identities require an active Freelancer, Teams or Enterprise subscription.
-Individual uses local sign-in. OIDC configuration alone does not activate SSO.
+New SSO identities require an active Teams or Enterprise subscription.
+Individual and Freelancer use local sign-in. OIDC configuration alone does not activate SSO.
 Previously provisioned identities can still sign in through the configured IdP
-after expiry or upgrade, with signature and current allowlist checks, to retain
-access to data and Settings. New identities are blocked until a paid license
-is active. Existing identities do not consume another slot.
+after expiry, downgrade or upgrade, with signature and current allowlist checks, to retain
+access to data and Settings. New identities are blocked until a Teams or Enterprise license is active. Existing identities do not consume another slot.
 
 Local and SSO identities are separate; they are never automatically linked by
-username or email. A local account uses a slot, including on Freelancer. For a
-fresh one-user SSO instance, configure OIDC with local login disabled, obtain
-its Installation ID from the login screen, install Freelancer and restart. The
-first allowlisted SSO identity creates the single account.
-
-An existing one-user local installation needs an explicit account migration by
-the server administrator before switching to SSO. Back up the data volume and
-stop Diffrook. Confirm the exact issuer and subject with the IdP administrator.
-In a SQLite transaction, add that identity to `sso_identities` for the existing
-local user's ID, clear that user's `password_hash`, and delete that user's
-sessions. Check that exactly the intended user is affected before committing.
-Restart with the paid license and OIDC configuration. Never infer the subject
-from email, create an extra account, or change installation IDs or quotas. This
-is an administrator operation on the stopped instance, not an automatic link API.
+username or email. A local account uses a user slot. A fresh SSO-only installation
+requires Teams or Enterprise: configure OIDC with local login disabled, obtain
+its Installation ID from the login screen, install the signed license and restart.
+The first allowlisted SSO identity creates an account. An existing local account
+can remain alongside SSO users within the plan's user allowance.
 
 Local setup creates only the initial administrator; additional users enter via
 SSO. All users have administrator access. Seat allowances do not introduce
@@ -192,7 +182,7 @@ There is no online revocation check. Treat issuer key loss as a security event.
 ## License terms
 
 Read [LICENSE](../LICENSE). This project-specific text should receive legal review
-before sales. Prior CC BY-NC 4.0 grants, Diffrook 1.0 grants and existing contracts
+before sales. Prior CC BY-NC 4.0 grants, Diffrook 1.0/1.1 grants and existing contracts
 remain effective for covered material. Original texts remain in [docs/licenses](licenses/).
 Third-party licenses still apply. Creative Commons explains that [prior CC grants
 are irrevocable](https://creativecommons.org/faq/#what-if-i-change-my-mind-about-using-a-cc-license).

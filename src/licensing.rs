@@ -67,7 +67,7 @@ impl std::error::Error for UserLimitReached {}
 pub(crate) struct SsoPlanRequired;
 impl std::fmt::Display for SsoPlanRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SSO requires an active Freelancer, Teams or Enterprise license")
+        f.write_str("SSO requires an active Teams or Enterprise license")
     }
 }
 impl std::error::Error for SsoPlanRequired {}
@@ -164,7 +164,9 @@ impl License {
     }
 
     pub fn allows_sso(&self) -> bool {
-        self.active().is_some()
+        self.active().is_some_and(|claims| {
+            claims.version == 1 || plan(&claims.edition).is_some_and(|p| p["sso"] == true)
+        })
     }
 
     pub async fn can_start_sso(&self, db: &SqlitePool) -> anyhow::Result<bool> {
@@ -363,9 +365,10 @@ mod tests {
             };
             assert_eq!(license.limits().users, Some(users));
             assert_eq!(license.limits().automations, Some(automations));
-            assert!(license.allows_sso());
+            assert_eq!(license.allows_sso(), edition != "freelancer");
             let status = license.status(&db).await.unwrap();
             assert_eq!(status["edition"], edition);
+            assert_eq!(status["features"]["sso"], edition != "freelancer");
             sqlx::query("DELETE FROM objects WHERE kind='automations'")
                 .execute(&db)
                 .await

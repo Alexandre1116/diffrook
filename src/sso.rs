@@ -539,8 +539,8 @@ mod tests {
         let mut state = AppState::with_security(dir.path(), security).await.unwrap();
         state.license = Arc::new(crate::licensing::License::subscription_for_tests(
             state.license.installation_id,
-            "freelancer",
-            1,
+            "teams",
+            5,
             0,
         ));
         Fixture {
@@ -758,12 +758,61 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn freelancer_limits_new_sso_users_but_allows_existing_identity_to_sign_in() {
-        let fixture = fixture(vec![]).await;
-        let config = fixture.state.security.oidc.as_ref().unwrap();
-        let user = provision(&fixture.state, config, "personal", None, false)
+    async fn fresh_freelancer_cannot_start_sso_or_provision_a_user() {
+        let mut fixture = fixture(vec![]).await;
+        fixture.state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+            fixture.state.license.installation_id,
+            "freelancer",
+            1,
+            0,
+        ));
+        assert!(!fixture
+            .state
+            .license
+            .can_start_sso(&fixture.state.db)
+            .await
+            .unwrap());
+        assert_eq!(
+            start(State(fixture.state.clone())).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert!(provision(
+            &fixture.state,
+            fixture.state.security.oidc.as_ref().unwrap(),
+            "new-user",
+            None,
+            false
+        )
+        .await
+        .unwrap_err()
+        .is::<crate::licensing::SsoPlanRequired>());
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&fixture.state.db)
             .await
             .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(fixture.mock.exchanges.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn freelancer_blocks_new_sso_but_allows_existing_identity_to_sign_in() {
+        let mut fixture = fixture(vec![]).await;
+        let user = provision(
+            &fixture.state,
+            fixture.state.security.oidc.as_ref().unwrap(),
+            "personal",
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+        fixture.state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+            fixture.state.license.installation_id,
+            "freelancer",
+            1,
+            0,
+        ));
+        let config = fixture.state.security.oidc.as_ref().unwrap();
         assert_eq!(
             provision(&fixture.state, config, "personal", None, false)
                 .await
@@ -773,7 +822,7 @@ mod tests {
         let rejected = provision(&fixture.state, config, "second", None, false)
             .await
             .unwrap_err();
-        assert!(rejected.is::<crate::licensing::UserLimitReached>());
+        assert!(rejected.is::<crate::licensing::SsoPlanRequired>());
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(&fixture.state.db)
             .await
@@ -783,7 +832,13 @@ mod tests {
 
     #[tokio::test]
     async fn local_account_uses_the_freelancer_user_slot_and_sso_cannot_bypass_it() {
-        let fixture = fixture(vec![]).await;
+        let mut fixture = fixture(vec![]).await;
+        fixture.state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+            fixture.state.license.installation_id,
+            "freelancer",
+            1,
+            0,
+        ));
         sqlx::query("INSERT INTO users(id,username,password_hash,created_at) VALUES('local','personal','unused','now')").execute(&fixture.state.db).await.unwrap();
         let error = provision(
             &fixture.state,
@@ -794,12 +849,18 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.is::<crate::licensing::UserLimitReached>());
+        assert!(error.is::<crate::licensing::SsoPlanRequired>());
     }
 
     #[tokio::test]
-    async fn concurrent_sso_provisioning_cannot_create_multiple_freelancer_users() {
-        let fixture = fixture(vec![]).await;
+    async fn concurrent_sso_provisioning_cannot_create_freelancer_users() {
+        let mut fixture = fixture(vec![]).await;
+        fixture.state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+            fixture.state.license.installation_id,
+            "freelancer",
+            1,
+            0,
+        ));
         let mut pending = tokio::task::JoinSet::new();
         for n in 0..8 {
             let state = fixture.state.clone();
@@ -816,11 +877,12 @@ mod tests {
         }
         let mut created = 0;
         while let Some(result) = pending.join_next().await {
-            if result.unwrap().is_ok() {
-                created += 1;
+            match result.unwrap() {
+                Ok(_) => created += 1,
+                Err(error) => assert!(error.is::<crate::licensing::SsoPlanRequired>()),
             }
         }
-        assert_eq!(created, 1);
+        assert_eq!(created, 0);
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(&fixture.state.db)
             .await
@@ -829,8 +891,8 @@ mod tests {
             .fetch_one(&fixture.state.db)
             .await
             .unwrap();
-        assert_eq!(users, 1);
-        assert_eq!(identities, 1);
+        assert_eq!(users, 0);
+        assert_eq!(identities, 0);
     }
 
     #[tokio::test]
