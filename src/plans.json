@@ -1,0 +1,30 @@
+{
+  "currency": "EUR",
+  "tax_included": false,
+  "annual_months_charged": 10,
+  "self_hosted": [
+    {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":0,"annual_eur":0,"per_user":false,"free_forever":true},
+    {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":true,"commercial_use":true,"monthly_eur":9,"annual_eur":90,"per_user":false},
+    {"id":"teams","name":"Teams","users":5,"automations":20,"sso":true,"commercial_use":true,"monthly_eur":29,"annual_eur":290,"per_user":false},
+    {"id":"enterprise","name":"Enterprise","users":null,"min_users":10,"automations":null,"automations_per_user":10,"sso":true,"commercial_use":true,"monthly_eur":8,"annual_eur":80,"per_user":true}
+  ],
+  "self_hosted_automation_pack": {"enterprise_only":true,"automations":10,"monthly_eur":5,"annual_eur":50},
+  "cloud": {
+    "status":"coming_soon",
+    "purchase_available":false,
+    "ai_included":false,
+    "byok":true,
+    "plans":[
+      {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":9,"annual_eur":90,"per_user":false,"executions_per_month":500},
+      {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":true,"commercial_use":true,"monthly_eur":19,"annual_eur":190,"per_user":false,"executions_per_month":2000},
+      {"id":"teams","name":"Teams","users":5,"automations":20,"sso":true,"commercial_use":true,"monthly_eur":59,"annual_eur":590,"per_user":false,"executions_per_month":10000},
+      {"id":"enterprise","name":"Enterprise","users":null,"min_users":10,"automations":null,"automations_per_user":10,"sso":true,"commercial_use":true,"monthly_eur":15,"annual_eur":150,"per_user":true,"executions_per_user_per_month":2000}
+    ],
+    "automation_pack":{"enterprise_only":true,"automations":10,"monthly_eur":10,"annual_eur":100},
+    "execution_pack":{"executions":1000,"monthly_eur":5,"customer_approval_required":true},
+    "ai":{"status":"coming_soon","billing":"monthly_pay_as_you_go","token_unit":1000000,"cache_priced_separately":true,"models":[
+      {"id":"claude-sonnet-5-5","name":"Claude Sonnet 5.5","input_eur":3,"output_eur":15},
+      {"id":"claude-opus-5-5","name":"Claude Opus 5.5","input_eur":6,"output_eur":30}
+    ]}
+  }
+}

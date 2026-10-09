@@ -54,10 +54,12 @@ Assign the IdP application to the appropriate administrators and require MFA in
 the IdP's policy.
 
 SSO defaults to disabling local authentication, including initial password setup.
-New SSO identities also consume the installation's licensed user allowance.
-The free Individual plan has one account; additional Business users need a
-signed license. See [plans and licenses](licensing.md).
-An allowlisted administrator can sign in directly on a fresh installation.
+New SSO identities require an active Freelancer, Teams or Enterprise license and
+consume its user allowance, including any existing local administrator. Individual
+uses local sign-in. Previously provisioned SSO identities retain verified sign-in
+access after expiry or upgrade; legacy signed Business licenses remain supported.
+See [plans and licenses](licensing.md) for SSO-only bootstrap and one-user migration.
+An allowlisted administrator can sign in directly on a fresh licensed installation.
 Existing local sessions stop working when local login is disabled. Explicitly
 set `DIFFROOK_LOCAL_LOGIN=true` only if a separate local administrator login is
 needed. SSO identities are never linked to local accounts by email or username.

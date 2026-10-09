@@ -1,4 +1,4 @@
-Diffrook Personal and Business License 1.1
+Diffrook Personal and Business License 1.0
 
 Copyright 2026 Alexandre Ramos and Diffrook contributors.
 
@@ -11,9 +11,6 @@ versions distributed before the adoption of this license. The previous license
 is retained in docs/licenses/CC-BY-NC-4.0.txt. Third-party dependencies and other
 separately licensed material retain their respective licenses. This license
 grants only rights held by the applicable Diffrook copyright holders.
-Rights previously granted under Diffrook Personal and Business License 1.0 and
-existing customer agreements remain effective for their covered material. The
-previous 1.0 text is retained in docs/licenses/Diffrook-Personal-Business-1.0.txt.
 
 Diffrook is source-available software. This license is not an OSI-approved
 open-source license. Viewing the source does not grant unrestricted commercial
@@ -28,11 +25,6 @@ to one registered user account and three saved automations. Disabled
 automations also count toward the limit. Multiple accounts, shared accounts
 and splitting an organizational deployment into personal installations do not
 qualify as Individual use.
-
-The Individual plan has no license fee for permitted use, with no expiry or
-trial period. SSO is not included for new Individual identities. The person
-provides their own server and AI provider or local model. Infrastructure and
-AI charges are separate from the free software license.
 
 The Individual plan does not permit use for a company, organization or team,
 or use in employment, freelance work, consulting, client work or other
@@ -52,24 +44,6 @@ applicable written commercial agreement. Fees, duration, renewal, support and
 any service commitments are determined by that agreement; no particular price,
 perpetual entitlement, support level or unlimited allowance is promised here.
 
-The paid self-hosted subscription plans are:
-- Freelancer: one registered user and ten saved automations, for individual
-  professional use, including SSO.
-- Teams: up to five registered users and twenty saved automations, including
-  SSO and use within the licensed organization.
-- Enterprise: purchased registered users, with a minimum of ten, and ten saved
-  automations per purchased user, pooled across the installation, including
-  SSO. Additional packs of ten automations may be purchased.
-
-Paid subscriptions renew monthly or annually and include software updates
-during their term. Published prices and annual discounts are described in
-docs/licensing.md and the embedded plan catalog. Payment and renewal must be
-arranged with the licensor; a license request is not payment or activation.
-Customers provide their own hosting and AI. Self-hosted subscriptions do not
-charge by execution. No support response time or availability SLA is included
-unless explicitly agreed in writing. Previously issued Business license files
-remain recognized under their original terms and technical allowances.
-
 A signed license file activates the purchased installation's technical
 entitlements. Possessing source code, setting an environment variable,
 altering the database or disabling a technical check does not grant a Business
@@ -81,9 +55,6 @@ On expiry or removal of a Business license, its additional technical creation
 allowances cease. Stored data is not automatically deleted. Continued access
 for reading, editing, deleting or exporting existing data does not extend a
 customer's contractual entitlement to operate Diffrook for business use.
-Previously provisioned SSO identities may retain verified sign-in access for
-data recovery; this does not include provisioning new SSO identities or extend
-a subscription's contractual term.
 
 4. Hosted subscriptions and third-party hosting
 
@@ -93,14 +64,6 @@ from a self-hosted Business license. Availability, features, infrastructure,
 usage limits, pricing, billing, data handling, support and termination are
 subject to a separate hosted-service agreement. This license does not promise
 that a hosted service is currently available or included in a self-hosted fee.
-
-Cloud Hosting is currently marked "Coming soon". Its displayed plans, AI token
-rates and execution allowances describe the intended offering and do not
-provide an available service or purchase entitlement. All planned hosted plans
-are paid monthly or annually. Customers may supply their own AI credentials
-or, once offered, pay monthly for managed AI consumption. Subscription discounts
-do not discount managed AI consumption. Hosted data isolation, backups, usage
-controls and billing require the hosted service to be launched separately.
 
 Operating, reselling or offering Diffrook as a hosted or managed service for
 third parties requires separate written authorization from the licensor.

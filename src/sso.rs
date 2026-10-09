@@ -96,6 +96,11 @@ pub async fn start(State(state): State<AppState>) -> Response {
     let Some(config) = &state.security.oidc else {
         return error(StatusCode::NOT_FOUND, "SSO is not configured");
     };
+    match state.license.can_start_sso(&state.db).await {
+        Ok(true) => (),
+        Ok(false) => return error(StatusCode::FORBIDDEN, crate::licensing::SsoPlanRequired),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
     match begin(&state, config).await {
         Ok(response) => response,
         Err(_) => error(
@@ -106,6 +111,9 @@ pub async fn start(State(state): State<AppState>) -> Response {
 }
 
 async fn begin(state: &AppState, config: &OidcConfig) -> anyhow::Result<Response> {
+    if !state.license.can_start_sso(&state.db).await? {
+        anyhow::bail!(crate::licensing::SsoPlanRequired);
+    }
     let client = CoreClient::from_provider_metadata(
         metadata(state, config).await?,
         ClientId::new(config.client_id.clone()),
@@ -193,6 +201,8 @@ pub async fn callback(
             tracing::warn!("SSO login rejected");
             Redirect::to(if e.is::<crate::licensing::UserLimitReached>() {
                 "/?sso_error=user_limit"
+            } else if e.is::<crate::licensing::SsoPlanRequired>() {
+                "/?sso_error=plan_required"
             } else {
                 "/?sso_error=failed"
             })
@@ -300,6 +310,9 @@ async fn provision(
     let id = if let Some(id) = existing {
         id
     } else {
+        if !state.license.allows_sso() {
+            anyhow::bail!(crate::licensing::SsoPlanRequired);
+        }
         let uuid = uuid::Uuid::new_v4();
         let id = uuid.to_string();
         let limit = state.license.limits().users.map(i64::from);
@@ -523,7 +536,13 @@ mod tests {
             ..Default::default()
         };
         let dir = tempfile::tempdir().unwrap();
-        let state = AppState::with_security(dir.path(), security).await.unwrap();
+        let mut state = AppState::with_security(dir.path(), security).await.unwrap();
+        state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+            state.license.installation_id,
+            "freelancer",
+            1,
+            0,
+        ));
         Fixture {
             state,
             mock,
@@ -739,7 +758,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn individual_limits_new_sso_users_but_allows_existing_identity_to_sign_in() {
+    async fn freelancer_limits_new_sso_users_but_allows_existing_identity_to_sign_in() {
         let fixture = fixture(vec![]).await;
         let config = fixture.state.security.oidc.as_ref().unwrap();
         let user = provision(&fixture.state, config, "personal", None, false)
@@ -763,7 +782,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_account_uses_the_individual_user_slot_and_sso_cannot_bypass_it() {
+    async fn local_account_uses_the_freelancer_user_slot_and_sso_cannot_bypass_it() {
         let fixture = fixture(vec![]).await;
         sqlx::query("INSERT INTO users(id,username,password_hash,created_at) VALUES('local','personal','unused','now')").execute(&fixture.state.db).await.unwrap();
         let error = provision(
@@ -779,7 +798,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn concurrent_sso_provisioning_cannot_create_multiple_individual_users() {
+    async fn concurrent_sso_provisioning_cannot_create_multiple_freelancer_users() {
         let fixture = fixture(vec![]).await;
         let mut pending = tokio::task::JoinSet::new();
         for n in 0..8 {
@@ -812,5 +831,101 @@ mod tests {
             .unwrap();
         assert_eq!(users, 1);
         assert_eq!(identities, 1);
+    }
+
+    #[tokio::test]
+    async fn individual_blocks_new_sso_but_retains_verified_existing_identity_access_on_downgrade()
+    {
+        let mut fixture = fixture(vec![]).await;
+        let paid = fixture.state.license.clone();
+        fixture.state.license = Arc::new(crate::licensing::License::individual_for_tests(
+            paid.installation_id,
+        ));
+        assert!(!fixture
+            .state
+            .license
+            .can_start_sso(&fixture.state.db)
+            .await
+            .unwrap());
+        let response = start(State(fixture.state.clone())).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(fixture.mock.exchanges.load(Ordering::SeqCst), 0);
+        let config = fixture.state.security.oidc.as_ref().unwrap();
+        assert!(provision(&fixture.state, config, "new-user", None, false)
+            .await
+            .unwrap_err()
+            .is::<crate::licensing::SsoPlanRequired>());
+        fixture.state.license = paid;
+        let (state, headers) = begin_login(&fixture).await;
+        let token = finish(&fixture.state, &headers, query(state))
+            .await
+            .unwrap();
+        fixture.state.license = Arc::new(crate::licensing::License::individual_for_tests(
+            fixture.state.license.installation_id,
+        ));
+        assert!(fixture
+            .state
+            .license
+            .can_start_sso(&fixture.state.db)
+            .await
+            .unwrap());
+        let mut session = HeaderMap::new();
+        session.insert(
+            header::COOKIE,
+            format!("__Host-diffrook_session={token}").parse().unwrap(),
+        );
+        assert!(auth::authenticate(&fixture.state, &session)
+            .await
+            .unwrap()
+            .is_some());
+        let (state, headers) = begin_login(&fixture).await;
+        assert!(finish(&fixture.state, &headers, query(state)).await.is_ok());
+        assert!(provision(
+            &fixture.state,
+            fixture.state.security.oidc.as_ref().unwrap(),
+            "second-user",
+            None,
+            false
+        )
+        .await
+        .unwrap_err()
+        .is::<crate::licensing::SsoPlanRequired>());
+    }
+
+    #[tokio::test]
+    async fn teams_and_enterprise_provision_only_their_purchased_user_allowances() {
+        for (edition, users) in [("teams", 5), ("enterprise", 10)] {
+            let mut fixture = fixture(vec![]).await;
+            fixture.state.license = Arc::new(crate::licensing::License::subscription_for_tests(
+                fixture.state.license.installation_id,
+                edition,
+                users,
+                0,
+            ));
+            for n in 0..users {
+                provision(
+                    &fixture.state,
+                    fixture.state.security.oidc.as_ref().unwrap(),
+                    &format!("member-{n}"),
+                    None,
+                    false,
+                )
+                .await
+                .unwrap();
+            }
+            let error = provision(
+                &fixture.state,
+                fixture.state.security.oidc.as_ref().unwrap(),
+                "extra",
+                None,
+                false,
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.is::<crate::licensing::UserLimitReached>(),
+                "{edition}"
+            );
+        }
     }
 }

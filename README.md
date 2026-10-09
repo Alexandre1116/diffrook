@@ -91,12 +91,26 @@ Copyright 2026 Alexandre Ramos and Diffrook contributors.
 Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
 The free Individual plan permits personal, noncommercial self-hosted use with
 **one user and three saved automations**, including disabled automations. Company,
-team, employment, freelance and other professional use requires a paid Business
-license, even with one user. Business installations use an offline signed license
-file with the allowances agreed with the customer.
+team, employment, freelance and other professional use requires a paid plan,
+even with one user. Paid self-hosted plans use offline signed, expiring licenses:
 
-A future subscription hosted by the project owner will have separate service terms;
-it is not currently included with a self-hosted license. Third-party hosting or
+| Self-hosted plan | Users | Saved automations | SSO | Monthly | Annual |
+| --- | ---: | ---: | :---: | ---: | ---: |
+| Individual | 1 | 3 | No | Free forever | Free |
+| Freelancer | 1 | 10 | Yes | EUR 9 | EUR 90 |
+| Teams | 5 | 20 | Yes | EUR 29 | EUR 290 |
+| Enterprise | Minimum 10 | 10 per licensed user, pooled | Yes | EUR 8/user | EUR 80/user |
+
+Prices exclude applicable tax. Enterprise packs add ten automations for EUR 5/month
+or EUR 50/year. All self-hosted plans bring their own AI and infrastructure;
+there is no execution-based license charge. Previously issued Business licenses
+remain supported. Settings shows the catalog and prepares a license request for
+the project owner; payment and renewal are arranged directly.
+
+**Cloud Hosting: Coming soon.** The catalog previews paid hosted subscriptions,
+BYOK or managed AI billed monthly by token consumption. Cloud purchase, activation
+and managed AI billing are unavailable. Hosted subscriptions will have separate
+service terms. Third-party hosting or
 resale requires separate written authorization. See [plans and license installation](docs/licensing.md).
 
 These terms are not an OSI open-source license. Rights already granted for

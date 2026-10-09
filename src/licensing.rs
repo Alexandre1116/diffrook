@@ -4,6 +4,53 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 
+pub fn catalog() -> &'static serde_json::Value {
+    static CATALOG: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("plans.json")).expect("embedded plan catalog")
+    })
+}
+
+fn plan(edition: &str) -> Option<&'static serde_json::Value> {
+    catalog()["self_hosted"]
+        .as_array()?
+        .iter()
+        .find(|p| p["id"] == edition)
+}
+
+fn subscription_limits(edition: &str, users: u32, packs: u32) -> anyhow::Result<Limits> {
+    let definition = plan(edition).context("Unsupported self-hosted plan")?;
+    ensure!(
+        definition["commercial_use"] == true,
+        "A subscription must use a paid self-hosted plan"
+    );
+    let automations = if edition == "enterprise" {
+        ensure!(
+            u64::from(users) >= definition["min_users"].as_u64().unwrap(),
+            "Enterprise requires at least 10 users"
+        );
+        u64::from(users) * definition["automations_per_user"].as_u64().unwrap()
+            + u64::from(packs)
+                * catalog()["self_hosted_automation_pack"]["automations"]
+                    .as_u64()
+                    .unwrap()
+    } else {
+        ensure!(
+            u64::from(users) == definition["users"].as_u64().unwrap() && packs == 0,
+            "Plan allowances do not match the subscription"
+        );
+        definition["automations"].as_u64().unwrap()
+    };
+    ensure!(
+        automations <= 2147483647,
+        "Automation allowance is too large"
+    );
+    Ok(Limits {
+        users: Some(users),
+        automations: Some(automations as u32),
+    })
+}
+
 pub const INDIVIDUAL_USERS: u32 = 1;
 pub const INDIVIDUAL_AUTOMATIONS: u32 = 3;
 
@@ -15,6 +62,15 @@ impl std::fmt::Display for UserLimitReached {
     }
 }
 impl std::error::Error for UserLimitReached {}
+
+#[derive(Debug)]
+pub(crate) struct SsoPlanRequired;
+impl std::fmt::Display for SsoPlanRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SSO requires an active Freelancer, Teams or Enterprise license")
+    }
+}
+impl std::error::Error for SsoPlanRequired {}
 
 #[derive(Clone, Copy, Serialize)]
 pub struct Limits {
@@ -42,6 +98,10 @@ struct Claims {
     expires_at: Option<i64>,
     max_users: Option<u32>,
     max_automations: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    billing_period: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    extra_automation_packs: Option<u32>,
 }
 
 #[derive(Clone)]
@@ -103,6 +163,23 @@ impl License {
         }
     }
 
+    pub fn allows_sso(&self) -> bool {
+        self.active().is_some()
+    }
+
+    pub async fn can_start_sso(&self, db: &SqlitePool) -> anyhow::Result<bool> {
+        if self.allows_sso() {
+            return Ok(true);
+        }
+        // Existing identities retain verified sign-in access on expiry or upgrade.
+        Ok(
+            sqlx::query_scalar::<_, i64>("SELECT EXISTS(SELECT 1 FROM sso_identities)")
+                .fetch_one(db)
+                .await?
+                != 0,
+        )
+    }
+
     pub async fn status(&self, db: &SqlitePool) -> anyhow::Result<serde_json::Value> {
         let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(db)
@@ -114,7 +191,12 @@ impl License {
         let limits = self.limits();
         let active = self.active();
         Ok(serde_json::json!({
-            "edition": if active.is_some() { "business" } else { "individual" },
+            "edition": active.map_or("individual", |c| c.edition.as_str()),
+            "plan_name": active.map_or("Individual", |c| plan(&c.edition).and_then(|p| p["name"].as_str()).unwrap_or("Business (legacy)")),
+            "licensed_edition": self.claims.as_ref().map(|c| &c.edition),
+            "billing_period": self.claims.as_ref().and_then(|c| c.billing_period.as_deref()),
+            "extra_automation_packs": self.claims.as_ref().and_then(|c| c.extra_automation_packs),
+            "features": {"sso":self.allows_sso(),"bring_your_own_ai":true},
             "installation_id": self.installation_id,
             "license_status": if self.claims.is_none() { "not_installed" } else if active.is_some() { "active" } else { "expired" },
             "customer": self.claims.as_ref().map(|c| &c.customer),
@@ -124,6 +206,34 @@ impl License {
             "can_create_automation": limits.automations.is_none_or(|max| automations < i64::from(max)),
             "over_limit": limits.users.is_some_and(|max| users > i64::from(max)) || limits.automations.is_some_and(|max| automations > i64::from(max))
         }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subscription_for_tests(
+        installation_id: uuid::Uuid,
+        edition: &str,
+        users: u32,
+        packs: u32,
+    ) -> Self {
+        let limits = subscription_limits(edition, users, packs).unwrap();
+        let mut license = Self::business_for_tests(installation_id);
+        let claims = license.claims.as_mut().unwrap();
+        claims.version = 2;
+        claims.edition = edition.into();
+        claims.billing_period = Some("annual".into());
+        claims.extra_automation_packs = Some(packs);
+        claims.expires_at = Some(chrono::Utc::now().timestamp() + 3600);
+        claims.max_users = limits.users;
+        claims.max_automations = limits.automations;
+        license
+    }
+
+    #[cfg(test)]
+    pub(crate) fn individual_for_tests(installation_id: uuid::Uuid) -> Self {
+        Self {
+            installation_id,
+            claims: None,
+        }
     }
 
     #[cfg(test)]
@@ -141,6 +251,8 @@ impl License {
                 expires_at: None,
                 max_users: None,
                 max_automations: None,
+                billing_period: None,
+                extra_automation_packs: None,
             }),
         }
     }
@@ -156,7 +268,13 @@ fn verify(bytes: &[u8], key: &VerifyingKey, installation: uuid::Uuid) -> anyhow:
         .context("Invalid license signature")?;
     let claims: Claims = serde_json::from_slice(&payload).context("Invalid license claims")?;
     ensure!(
-        claims.version == 1 && claims.product == "diffrook" && claims.edition == "business",
+        claims.product == "diffrook"
+            && ((claims.version == 1 && claims.edition == "business")
+                || (claims.version == 2
+                    && matches!(
+                        claims.edition.as_str(),
+                        "freelancer" | "teams" | "enterprise"
+                    ))),
         "Unsupported license"
     );
     ensure!(
@@ -181,6 +299,34 @@ fn verify(bytes: &[u8], key: &VerifyingKey, installation: uuid::Uuid) -> anyhow:
             .all(|n| n.is_none_or(|v| (1..=2147483647).contains(&v))),
         "Invalid license limits"
     );
+    if claims.version == 1 {
+        ensure!(
+            claims.billing_period.is_none() && claims.extra_automation_packs.is_none(),
+            "Legacy licenses cannot contain subscription claims"
+        );
+    } else {
+        ensure!(
+            claims.expires_at.is_some(),
+            "Paid subscriptions require expiry"
+        );
+        ensure!(
+            matches!(claims.billing_period.as_deref(), Some("monthly" | "annual")),
+            "Invalid subscription billing period"
+        );
+        let limits = subscription_limits(
+            &claims.edition,
+            claims
+                .max_users
+                .context("Subscription users are required")?,
+            claims
+                .extra_automation_packs
+                .context("Subscription pack count is required")?,
+        )?;
+        ensure!(
+            limits.automations == claims.max_automations,
+            "Automation allowance does not match the subscription"
+        );
+    }
     Ok(claims)
 }
 
@@ -193,6 +339,80 @@ mod tests {
         let payload = serde_json::to_vec(claims).unwrap();
         let message = [b"diffrook-license-v1\0".as_slice(), payload.as_slice()].concat();
         serde_json::to_vec(&serde_json::json!({"payload":URL_SAFE_NO_PAD.encode(&payload),"signature":URL_SAFE_NO_PAD.encode(key.sign(&message).to_bytes())})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn subscriptions_require_signed_fixed_allowances_and_expiry_and_never_activate_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::open(dir.path().join("test.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+        let key = SigningKey::from_bytes(&[37; 32]);
+        let id = uuid::Uuid::new_v4();
+        for (edition, users, packs, automations) in [
+            ("freelancer", 1, 0, 10),
+            ("teams", 5, 0, 20),
+            ("enterprise", 10, 2, 120),
+        ] {
+            let license = License::subscription_for_tests(id, edition, users, packs);
+            let value = serde_json::to_value(license.claims.unwrap()).unwrap();
+            let verified = verify(&envelope(&value, &key), &key.verifying_key(), id).unwrap();
+            let license = License {
+                installation_id: id,
+                claims: Some(verified),
+            };
+            assert_eq!(license.limits().users, Some(users));
+            assert_eq!(license.limits().automations, Some(automations));
+            assert!(license.allows_sso());
+            let status = license.status(&db).await.unwrap();
+            assert_eq!(status["edition"], edition);
+            sqlx::query("DELETE FROM objects WHERE kind='automations'")
+                .execute(&db)
+                .await
+                .unwrap();
+            for n in 0..=automations {
+                let value = serde_json::json!({"id":format!("{edition}-{n}"),"created_at":"now","updated_at":"now"});
+                assert_eq!(
+                    crate::db::create_automation(&db, &value, license.limits().automations)
+                        .await
+                        .unwrap(),
+                    n < automations,
+                    "{edition}"
+                );
+            }
+            for (field, invalid) in [
+                ("max_automations", serde_json::json!(automations + 1)),
+                ("max_users", serde_json::json!(0)),
+                ("billing_period", serde_json::json!("perpetual")),
+                ("expires_at", serde_json::Value::Null),
+                ("edition", serde_json::json!("cloud")),
+                ("edition", serde_json::json!("individual")),
+            ] {
+                let mut changed = value.clone();
+                changed[field] = invalid;
+                assert!(
+                    verify(&envelope(&changed, &key), &key.verifying_key(), id).is_err(),
+                    "{edition}: {field}"
+                );
+            }
+            let mut expired = value;
+            expired["expires_at"] = serde_json::json!(1);
+            let license = License {
+                installation_id: id,
+                claims: Some(verify(&envelope(&expired, &key), &key.verifying_key(), id).unwrap()),
+            };
+            assert_eq!(license.limits().automations, Some(3));
+            assert!(!license.allows_sso());
+            let status = license.status(&db).await.unwrap();
+            assert_eq!(status["license_status"], "expired");
+            assert_eq!(status["licensed_edition"], edition);
+            assert_eq!(status["usage"]["automations"], automations);
+            assert_eq!(status["over_limit"], true);
+        }
+        assert!(subscription_limits("enterprise", 9, 0).is_err());
+        assert!(subscription_limits("enterprise", u32::MAX, u32::MAX).is_err());
+        assert!(subscription_limits("freelancer", 2, 0).is_err());
+        assert!(subscription_limits("teams", 5, 1).is_err());
     }
 
     #[test]

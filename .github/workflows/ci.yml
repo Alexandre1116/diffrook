@@ -84,7 +84,7 @@ jobs:
           cp -R web/dist/. bundle/web/
           cp LICENSE bundle/LICENSE
           mkdir -p bundle/licenses
-          cp docs/licenses/CC-BY-NC-4.0.txt bundle/licenses/
+          cp -R docs/licenses/. bundle/licenses/
           tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web LICENSE licenses
           gh release upload "$GITHUB_REF_NAME" "diffrook-linux-${{ matrix.arch }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
         env:

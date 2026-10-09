@@ -102,6 +102,15 @@ async function check(name, fn) { await fn(); report.push(name); console.log(`PAS
 const automation = (connectionId, providerId, overrides = {}) => ({ name: 'Integration review', description: 'Local mock services only', enabled: true, connection_id: connectionId, provider_id: providerId, model: 'test-model', repositories: ['acme/demo'], trigger: { events: ['pull_request.opened', 'issue_comment.command'], command: '/diffrook', schedule_enabled: false, cron: '0 9 * * 1', timezone: 'Europe/Lisbon', schedule_target: 'repository', branch: 'main' }, filters: { labels: [], ignore_drafts: true, allowed_actors: ['developer'], ignore_paths: [] }, action: 'review', instructions: 'CHECK_AUTOMATION_INSTRUCTIONS_ARE_USED', limits: { max_files: 200, max_file_bytes: 64000, max_context_chars: 180000, max_output_tokens: 6000, timeout_seconds: 60, max_fix_files: 10 }, notifications: [{ kind: 'pr_comment', url: '' }], fix: { mode: 'new_branch', branch_prefix: 'diffrook/' }, ...overrides });
 let gh, forgejo, provider, auto, notificationProvider;
 try {
+  await check('Public self-hosted pricing and Cloud coming soon', async () => {
+    const catalog = await api('/api/plans');
+    assert.equal(catalog.currency, 'EUR');
+    assert.deepEqual(catalog.self_hosted.map(p => [p.id, p.monthly_eur, p.annual_eur]), [['individual', 0, 0], ['freelancer', 9, 90], ['teams', 29, 290], ['enterprise', 8, 80]]);
+    assert.equal(catalog.cloud.status, 'coming_soon');
+    assert.equal(catalog.cloud.purchase_available, false);
+    assert.ok(catalog.cloud.plans.every(p => p.monthly_eur > 0));
+    await api('/api/plans/cloud/activate', 'POST', { plan: 'teams' }, { status: 404 });
+  });
   await check('Setup and authentication', async () => {
     const status = await api('/api/status');
     assert.equal(status.setup_required, true, 'Use a fresh isolated database for smoke tests');

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import Plans, { type PlanCatalog } from "./Plans";
 import {
   Activity,
   ArrowDownRight,
@@ -60,6 +61,8 @@ type Status = {
   version: string;
   sso_enabled: boolean;
   local_login_enabled: boolean;
+  sso_requires_license: boolean;
+  installation_id: string;
 };
 
 async function api<T = any>(
@@ -168,6 +171,7 @@ function App() {
       runs: Obj[];
       updates: Obj;
       license: Obj | null;
+      catalog: PlanCatalog | null;
     }>({
       dashboard: {},
       automations: [],
@@ -177,6 +181,7 @@ function App() {
       runs: [],
       updates: { releases: [], policy: "manual" },
       license: null,
+      catalog: null,
     });
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
@@ -191,7 +196,7 @@ function App() {
     if (!status?.authenticated) return;
     setBusy(true);
     try {
-      const [dashboard, automations, connections, providers, notificationProviders, runs, updates, license] =
+      const [dashboard, automations, connections, providers, notificationProviders, runs, updates, license, catalog] =
         await Promise.all([
           api("/dashboard"),
           api("/automations"),
@@ -201,8 +206,9 @@ function App() {
           api("/runs"),
           api("/updates"),
           api("/license"),
+          api<PlanCatalog>("/plans"),
         ]);
-      setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates, license });
+      setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates, license, catalog });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -212,7 +218,9 @@ function App() {
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
-        ? "This installation's user limit has been reached. Contact your administrator about a Business license."
+        ? "This installation's user limit has been reached. Contact your administrator about the paid plan's allowance."
+        : new URLSearchParams(window.location.search).get("sso_error") === "plan_required"
+        ? "SSO requires an active Freelancer, Teams or Enterprise license. Existing identities can still sign in after a downgrade."
         : "SSO sign-in failed. Your account may not be authorized. Try again or contact your administrator.");
       window.history.replaceState({}, "", window.location.pathname);
     }
@@ -281,7 +289,7 @@ function App() {
   };
   const createAutomation = () => {
     if (data.license?.can_create_automation === false) {
-      setError("Automation limit reached. Delete an automation or install a Business license. See Settings for plan details.");
+      setError("Automation limit reached. Delete an automation or upgrade your self-hosted plan. See Settings for plan details.");
       return;
     }
     setModal({ kind: "automation", item: blankAutomation() });
@@ -327,6 +335,8 @@ function App() {
         setup={status.setup_required}
         sso={status.sso_enabled}
         localLogin={status.local_login_enabled}
+        ssoRequiresLicense={status.sso_requires_license}
+        installationId={status.installation_id}
         error={error}
         busy={busy}
         submit={login}
@@ -735,6 +745,8 @@ function Auth({
   setup,
   sso,
   localLogin,
+  ssoRequiresLicense,
+  installationId,
   error,
   busy,
   submit,
@@ -742,6 +754,8 @@ function Auth({
   setup: boolean;
   sso: boolean;
   localLogin: boolean;
+  ssoRequiresLicense: boolean;
+  installationId: string;
   error: string;
   busy: boolean;
   submit: (e: React.FormEvent<HTMLFormElement>) => void;
@@ -766,6 +780,11 @@ function Auth({
             <ShieldCheck size={17} /> Sign in with SSO
           </a>
         )}
+        {ssoRequiresLicense && <div className="auth-license-note" role="status">
+          <p>SSO requires an active Freelancer, Teams or Enterprise license. Ask the instance administrator to install a signed license.</p>
+          {!localLogin && <p>Installation ID: <code>{installationId}</code></p>}
+          <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a>
+        </div>}
         {sso && localLogin && <p className="auth-separator">Or use your local administrator account</p>}
         {localLogin && <form onSubmit={submit} className="form-stack">
           {setup && (
@@ -1224,7 +1243,7 @@ function AutomationPage({
           New automation
         </button>
       </div>
-      {!canCreate && <div className="notice-strip"><ShieldCheck size={17} /><span>Your plan's automation limit is reached. Disabled automations also count. Delete one or install a Business license. Plan details are in Settings.</span></div>}
+      {!canCreate && <div className="notice-strip"><ShieldCheck size={17} /><span>Your plan's automation limit is reached. Disabled automations also count. Delete one or upgrade your self-hosted plan. Plan details are in Settings.</span></div>}
       <div className="toolbar">
         <div className="searchbox">
           <Search size={16} />
@@ -1684,16 +1703,18 @@ function SettingsPage({
         {data.license && <section className="panel-card setting-panel wide-setting">
           <div className="setting-icon"><KeyRound size={19} /></div>
           <div>
-            <h3>{data.license.edition === "business" ? "Business plan" : "Individual plan"}</h3>
-            <p>{data.license.edition === "business" ? "Paid self-hosted license. Allowances follow your commercial agreement." : "Free for personal, noncommercial use. Companies, teams and professional work require a Business license."}</p>
+            <h3>{data.license.plan_name} plan</h3>
+            <p>{data.license.edition !== "individual" ? "Paid self-hosted license. Bring your own AI; allowances follow your commercial agreement." : "Free forever for personal, noncommercial use. Professional work requires Freelancer, Teams or Enterprise."}</p>
             <div className="settings-line"><span>Users</span><b>{data.license.usage.users} / {data.license.limits.users ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>Saved automations</span><b>{data.license.usage.automations} / {data.license.limits.automations ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>License status</span><b>{data.license.license_status.replaceAll("_", " ")}</b></div>
+            <div className="settings-line"><span>SSO entitlement</span><b>{data.license.features.sso ? "Included" : "Paid plans"}</b></div>
+            {data.license.billing_period && <div className="settings-line"><span>Billing period</span><b>{data.license.billing_period}</b></div>}
             {data.license.customer && <div className="settings-line"><span>Licensed to</span><b>{data.license.customer}</b></div>}
             {data.license.expires_at && <div className="settings-line"><span>Expires</span><b>{date(new Date(data.license.expires_at * 1000).toISOString())}</b></div>}
             <div className="settings-line"><span>Installation ID</span><code>{data.license.installation_id}</code></div>
             {data.license.over_limit && <p role="alert">Existing data exceeds this plan's limits. It is retained for editing, deletion and export. Additional creations are blocked at the applicable limit.</p>}
-            <p>Disabled automations count. To activate Business, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart.</p>
+            <p>Disabled automations count. To activate a paid plan, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart.</p>
             <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
           </div>
         </section>}
@@ -1762,6 +1783,7 @@ function SettingsPage({
           </div>
         </section>
       </div>
+      {data.catalog && data.license && <Plans catalog={data.catalog} edition={data.license.edition} installationId={data.license.installation_id} notice={notice} />}
     </>
   );
 }

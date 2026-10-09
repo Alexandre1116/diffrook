@@ -22,6 +22,10 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/api/status", get(status))
         .route(
+            "/api/plans",
+            get(|| async { Json(crate::licensing::catalog()) }),
+        )
+        .route(
             "/api/setup",
             post(auth::setup).layer(DefaultBodyLimit::max(16 * 1024)),
         )
@@ -123,7 +127,8 @@ pub(crate) async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Re
 }
 async fn status(State(s): State<AppState>, h: HeaderMap) -> Response {
     let setup = s.security.local_login && auth::is_setup_required(&s).await.unwrap_or(true);
-    Json(json!({"setup_required":setup,"authenticated":auth::authenticate(&s,&h).await.ok().flatten().is_some(),"version":env!("CARGO_PKG_VERSION"),"sso_enabled":s.security.oidc.is_some(),"local_login_enabled":s.security.local_login})).into_response()
+    let sso = s.security.oidc.is_some() && s.license.can_start_sso(&s.db).await.unwrap_or(false);
+    Json(json!({"setup_required":setup,"authenticated":auth::authenticate(&s,&h).await.ok().flatten().is_some(),"version":env!("CARGO_PKG_VERSION"),"sso_enabled":sso,"sso_requires_license":s.security.oidc.is_some() && !sso,"installation_id":s.license.installation_id,"local_login_enabled":s.security.local_login})).into_response()
 }
 async fn license_status(State(s): State<AppState>, h: HeaderMap) -> Response {
     if let Err(r) = guard(&s, &h, false).await {
@@ -586,7 +591,7 @@ async fn object_write(
         };
         match saved {
             Ok(true) => (),
-            Ok(false) if is_create => return error(StatusCode::FORBIDDEN, "Automation limit reached for this plan. Delete an automation or install a Business license."),
+            Ok(false) if is_create => return error(StatusCode::FORBIDDEN, "Automation limit reached for this plan. Delete an automation or upgrade your self-hosted plan."),
             Ok(false) => return error(StatusCode::NOT_FOUND, "Automation not found"),
             Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
         }

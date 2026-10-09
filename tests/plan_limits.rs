@@ -225,3 +225,32 @@ async fn existing_over_quota_data_is_preserved_and_reported_without_allowing_mor
         4
     );
 }
+
+#[tokio::test]
+async fn public_catalog_lists_approved_prices_but_never_offers_cloud_activation() {
+    let (_dir, _state, app, _cookie, _input) = fixture().await;
+    let (code, catalog) = call(&app, "GET", "/api/plans", None, None).await;
+    assert_eq!(code, StatusCode::OK);
+    assert_eq!(catalog["currency"], "EUR");
+    assert_eq!(catalog["self_hosted"][0]["free_forever"], true);
+    assert_eq!(catalog["self_hosted"][1]["monthly_eur"], 9);
+    assert_eq!(catalog["self_hosted"][2]["annual_eur"], 290);
+    assert_eq!(catalog["self_hosted"][3]["min_users"], 10);
+    assert_eq!(catalog["cloud"]["status"], "coming_soon");
+    assert_eq!(catalog["cloud"]["purchase_available"], false);
+    for plan in catalog["cloud"]["plans"].as_array().unwrap() {
+        assert!(plan["monthly_eur"].as_u64().unwrap() > 0);
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/plans/cloud/activate",
+            Some(json!({"plan":"teams"})),
+            None
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+}
