@@ -3,11 +3,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
 };
 use anyhow::Context;
-use axum::{
-    http::{header, HeaderValue},
-    response::IntoResponse,
-    Json,
-};
+use axum::{http::header, response::IntoResponse, Json};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rand::RngCore;
 use serde_json::{json, Value};
@@ -31,10 +27,32 @@ pub struct AppState {
     pub updates: Arc<tokio::sync::RwLock<Value>>,
     pub restart: tokio::sync::watch::Sender<bool>,
     pub update_lock: Arc<tokio::sync::Mutex<()>>,
+    pub security: Arc<crate::security::SecurityConfig>,
+    pub rate_limiter: Arc<tokio::sync::Mutex<crate::security::RateLimiter>>,
+    pub password_slots: Arc<tokio::sync::Semaphore>,
+    pub dummy_password_hash: Arc<String>,
+    pub oidc_metadata: Arc<
+        tokio::sync::Mutex<
+            Option<(
+                std::time::Instant,
+                openidconnect::core::CoreProviderMetadata,
+            )>,
+        >,
+    >,
 }
 
 impl AppState {
     pub async fn new(data_dir: impl AsRef<Path>) -> anyhow::Result<Self> {
+        Self::with_security(data_dir, crate::security::SecurityConfig::from_env()?).await
+    }
+
+    pub async fn with_security(
+        data_dir: impl AsRef<Path>,
+        security: crate::security::SecurityConfig,
+    ) -> anyhow::Result<Self> {
+        let dummy_password_hash =
+            tokio::task::spawn_blocking(|| crate::auth::hash_password(&crate::auth::fresh_token()))
+                .await??;
         let data_dir = data_dir.as_ref().to_path_buf();
         tokio::fs::create_dir_all(&data_dir).await?;
         let key_path = data_dir.join("encryption.key");
@@ -62,7 +80,9 @@ impl AppState {
         };
         let db_path = data_dir.join("diffrook.sqlite");
         let db = crate::db::open(db_path.to_str().context("database path is not UTF-8")?).await?;
-        let setup_token = if let Some(token) = std::env::var("DIFFROOK_SETUP_TOKEN")
+        let setup_token = if !security.local_login {
+            String::new()
+        } else if let Some(token) = std::env::var("DIFFROOK_SETUP_TOKEN")
             .ok()
             .filter(|t| !t.trim().is_empty())
         {
@@ -77,7 +97,13 @@ impl AppState {
                     uuid::Uuid::new_v4().simple(),
                     uuid::Uuid::new_v4().simple()
                 );
-                tokio::fs::write(path, &token).await?;
+                tokio::fs::write(&path, &token).await?;
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                        .await?;
+                }
                 tracing::warn!("Initial Diffrook setup token: {token}");
                 token
             }
@@ -100,6 +126,11 @@ impl AppState {
             )),
             restart,
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
+            security: Arc::new(security),
+            rate_limiter: Arc::new(tokio::sync::Mutex::new(Default::default())),
+            password_slots: Arc::new(tokio::sync::Semaphore::new(2)),
+            dummy_password_hash: Arc::new(dummy_password_hash),
+            oidc_metadata: Arc::new(tokio::sync::Mutex::new(None)),
         })
     }
 
@@ -137,6 +168,7 @@ impl AppState {
         for field in match kind {
             "connections" => vec!["token", "webhook_secret"],
             "providers" => vec!["api_key"],
+            "notification_providers" => vec!["url"],
             _ => vec![],
         } {
             if let Some(s) = value[field].as_str() {
@@ -158,6 +190,7 @@ impl AppState {
         for field in match kind {
             "connections" => vec!["token", "webhook_secret"],
             "providers" => vec!["api_key"],
+            "notification_providers" => vec!["url"],
             _ => vec![],
         } {
             if let Some(s) = value[field].as_str() {
@@ -182,6 +215,7 @@ impl AppState {
                 ("webhook_secret", "has_webhook_secret"),
             ],
             "providers" => vec![("api_key", "has_api_key")],
+            "notification_providers" => vec![("url", "has_url")],
             _ => vec![],
         } {
             let s = value[field].as_str().unwrap_or("");
@@ -203,18 +237,13 @@ impl AppState {
 }
 
 pub fn error(status: axum::http::StatusCode, msg: impl ToString) -> axum::response::Response {
-    (status, Json(json!({"error": msg.to_string()}))).into_response()
-}
-pub fn session_cookie(token: &str, max_age: i64) -> HeaderValue {
-    let secure = std::env::var("DIFFROOK_SECURE_COOKIES").is_ok_and(|v| v == "true" || v == "1");
-    let suffix = if secure { "; Secure" } else { "" };
-    HeaderValue::from_str(&format!(
-        "diffrook_session={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}{suffix}"
-    ))
-    .unwrap()
-}
-pub fn clear_cookie() -> HeaderValue {
-    session_cookie("", 0)
+    let message = if status.is_server_error() {
+        tracing::error!(%status, "API request failed");
+        "Internal server error".to_owned()
+    } else {
+        msg.to_string()
+    };
+    (status, Json(json!({"error": message}))).into_response()
 }
 pub fn request_origin_ok(headers: &axum::http::HeaderMap) -> bool {
     if headers
@@ -262,6 +291,27 @@ mod tests {
         state.reveal("connections", &mut connection).unwrap();
         assert_eq!(connection["token"], "api-secret");
         assert_eq!(connection["webhook_secret"], "hook-secret");
+    }
+    #[tokio::test]
+    async fn notification_provider_url_is_encrypted_and_masked() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path()).await.unwrap();
+        let mut provider = json!({"url":"https://hooks.slack.com/services/test-secret"});
+        state
+            .protect("notification_providers", &mut provider)
+            .unwrap();
+        assert!(!provider.to_string().contains("test-secret"));
+        let mut shown = provider.clone();
+        state.mask("notification_providers", &mut shown).unwrap();
+        assert_eq!(shown["url"], "");
+        assert_eq!(shown["has_url"], true);
+        state
+            .reveal("notification_providers", &mut provider)
+            .unwrap();
+        assert_eq!(
+            provider["url"],
+            "https://hooks.slack.com/services/test-secret"
+        );
     }
     #[test]
     fn origin_check_requires_custom_header_and_matches_host_and_port() {

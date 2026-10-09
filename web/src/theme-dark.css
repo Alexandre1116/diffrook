@@ -1,0 +1,443 @@
+:root {
+  color-scheme: dark;
+  color: #dbe5f2;
+  background: #141a22;
+  --ink: #e8eef8;
+  --muted: #9aa9bd;
+  --line: #344153;
+  --paper: #202936;
+}
+
+body,
+.shell,
+.main {
+  background: #141a22;
+}
+
+body {
+  background-image: radial-gradient(circle at 78% 0%, #1d2a3c 0, #141a22 42%);
+  background-attachment: fixed;
+}
+
+.sidebar {
+  background: #10151d;
+  border-right: 1px solid #293342;
+}
+
+.workspace,
+.account-menu {
+  background: #1b2532;
+  border-color: #344255;
+}
+
+.nav-item.selected,
+.nav-item:hover,
+.account-menu button:hover,
+.account-menu button:focus-visible,
+.account-menu-toggle:hover,
+.account-menu-toggle:focus-visible {
+  background: #283d5d;
+}
+
+.topbar {
+  background: #171e28;
+  border-color: #2e3a4b;
+}
+
+.breadcrumbs,
+.crumb-slash,
+.eyebrow,
+.toolbar-meta,
+.stat-top,
+.stat-top svg,
+.section-heading p,
+.panel-title p,
+.page-head p,
+.stat-card > small,
+.run-title small,
+.trigger-label,
+.step-copy small,
+.quick-card > button small,
+.empty p,
+.automation-desc,
+.automation-name > span,
+.automation-meta span,
+.automation-card-foot > span,
+.resource-info > p,
+.resource-details span,
+.setting-panel p,
+.settings-line,
+.auth-card > p,
+.auth-foot,
+.editor-section-head p,
+.switch-field small,
+.switch-card small,
+.check-card small,
+.notification-hint,
+.detail-overview p,
+.detail-stats small,
+.finding-top,
+.findings article > p,
+.release-copy p,
+.release-list small,
+.release-controls label,
+.release-controls > small {
+  color: #9aa9bd;
+}
+
+.breadcrumbs strong,
+.page-head h1,
+.stat-card > strong,
+.section-heading h2,
+.panel-title h3,
+.run-title b,
+.step-copy b,
+.quick-card > button b,
+.empty h3,
+.automation-name h3,
+.action-pill b,
+.resource-title h3,
+.setting-panel h3,
+.settings-line b,
+.auth-brand > span,
+.auth-card h1,
+.modal-header h2,
+.editor-section-head h3,
+.switch-field b,
+.switch-card b,
+.check-card b,
+.run-modal-banner b,
+.detail-overview h3,
+.detail-stats b,
+.detail-section h4,
+.findings article > b,
+.release-copy h2,
+.release-list a {
+  color: #e8eef8;
+}
+
+.instance-pill,
+.progress-chip,
+.kind-badge {
+  background: #202b39;
+  border-color: #3a4960;
+  color: #b2c3da;
+}
+
+.icon-btn,
+.quick-card > button,
+.row-arrow,
+.step-arrow,
+.resource-details svg {
+  color: #9aaec8;
+}
+
+.icon-btn:hover,
+.btn.secondary:hover {
+  background: #2b3849;
+  color: #f3f7ff;
+}
+
+.btn.secondary,
+.target-choice button {
+  background: #263242;
+  border-color: #3b4c61;
+  color: #d9e5f5;
+}
+
+.btn.primary {
+  background: #3367df;
+  color: #fff;
+}
+
+.btn.primary:hover {
+  background: #477cf0;
+}
+
+.text-btn,
+.banner-link,
+.quick-card > button:hover b {
+  color: #91b5ff;
+}
+
+.text-btn:hover,
+.banner-link:hover {
+  color: #c3d7ff;
+}
+
+.welcome-banner {
+  background: linear-gradient(115deg, #223858, #1c2b43 70%, #213c65);
+  border: 1px solid #385176;
+}
+
+.stat-card,
+.table-card,
+.panel-card,
+.automation-card,
+.resource-card,
+.auth-card,
+.modal {
+  background: #202936;
+  border-color: #344153;
+  box-shadow: 0 10px 28px #090e1680;
+}
+
+.stat-card {
+  box-shadow: 0 5px 16px #090e1640;
+}
+
+.release-panel {
+  background: linear-gradient(120deg, #202936 0%, #243247 100%);
+  border-color: #3b4d66;
+}
+
+.release-list a {
+  border-color: #455977;
+  background: #253449;
+}
+
+.release-list a span {
+  color: #9bb8e8;
+}
+
+.release-controls select {
+  background: #151e29;
+  border: 1px solid #3b4b5f;
+  border-radius: 5px;
+  color: #edf3fb;
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
+.data-table th,
+.automation-card-foot,
+.run-actions-list {
+  background: #1c2532;
+  border-color: #344153;
+}
+
+.data-table td {
+  color: #c8d5e6;
+  border-color: #344153;
+}
+
+.data-table tbody tr:hover {
+  background: #29374a;
+}
+
+.searchbox,
+.form-stack input,
+.form-stack select,
+.form-stack textarea,
+.form-grid input,
+.form-grid select,
+.form-grid textarea,
+.number-grid input,
+.command-field input,
+.notification-row input,
+.notification-row select,
+.editor-section > label > input,
+.editor-section > label > textarea {
+  background: #151e29;
+  border-color: #3b4b5f;
+  color: #edf3fb;
+}
+
+.searchbox input {
+  color: #edf3fb;
+}
+
+.form-stack input::placeholder,
+.form-grid input::placeholder,
+.form-stack textarea::placeholder,
+.searchbox input::placeholder {
+  color: #8292a8;
+}
+
+.form-stack label,
+.form-grid label,
+.number-grid label,
+.command-field,
+.editor-section > label,
+.target-choice > span {
+  color: #d8e3f1;
+}
+
+.form-stack label small,
+.form-grid label small,
+.command-field small,
+.editor-section > label > small {
+  color: #9aa9bd;
+}
+
+.run-glyph,
+.step-icon,
+.quick-spark,
+.empty-icon,
+.automation-symbol,
+.action-fix_pr,
+.action-solve_issue,
+.action-audit,
+.resource-logo,
+.resource-logo.forgejo,
+.resource-logo.openai,
+.resource-logo.ollama,
+.resource-logo.anthropic,
+.setting-icon,
+.setting-icon.amber,
+.section-index,
+.switch-icon,
+.detail-section h4 span {
+  background: #29394f;
+  border-color: #3e5169;
+  color: #a9c3f3;
+}
+
+.status,
+.status-cancelled,
+.severity {
+  background: #313b4b;
+  color: #c5d1e1;
+}
+
+.status-succeeded,
+.status-running,
+.status-queued,
+.severity-low,
+.severity-medium {
+  background: #263c5b;
+  color: #b7d0ff;
+}
+
+.status-failed,
+.severity-critical,
+.severity-high {
+  background: #4a3036;
+  color: #ffc4c2;
+}
+
+.action-pill,
+.repo-chip,
+.schedule-box,
+.run-modal-banner,
+.field-callout,
+.notice-strip,
+.editor-section-head code,
+.target-choice button.active,
+.json-box {
+  background: #263343;
+  border-color: #3b4c61;
+  color: #b9cbe4;
+}
+
+.notice-strip b,
+.field-callout svg,
+.run-modal-banner > svg,
+.target-choice button.active {
+  color: #a9c6ff;
+}
+
+.repo-chip,
+.action-pill,
+.run-modal-banner,
+.field-callout,
+.notice-strip {
+  color: #b9cbe4;
+}
+
+.step,
+.quick-card > button,
+.settings-line,
+.automation-meta,
+.automation-card-foot,
+.run-actions-list,
+.auth-foot,
+.editor-section,
+.modal-header,
+.sticky-actions,
+.resource-actions,
+.detail-stats,
+.detail-stats > div,
+.findings article {
+  border-color: #344153;
+}
+
+.step-num,
+.check-mark,
+.switch {
+  border-color: #4a5d74;
+}
+
+.step.done .step-num,
+.check-card input:checked + .check-mark {
+  background: #3158a4;
+  border-color: #638ff4;
+  color: #fff;
+}
+
+.step-num,
+.switch,
+.check-card,
+.switch-field,
+.switch-card,
+.target-choice button,
+.inline-empty,
+.empty-inline {
+  background: #202b39;
+  border-color: #3b4b5f;
+  color: #b3c3d8;
+}
+
+.check-card:has(input:checked) {
+  background: #263b5a;
+  border-color: #5b83d2;
+}
+
+.switch.on {
+  background: #3367df;
+  border-color: #638ff4;
+}
+
+.auth,
+.splash {
+  background: #141a22;
+  color: #a9bbd3;
+}
+
+.auth-card {
+  background: #202936;
+}
+
+.modal-backdrop {
+  background: #070b10c9;
+}
+
+.form-scroll {
+  scrollbar-color: #50617a transparent;
+}
+
+.logs-box {
+  background: #121a25;
+  border-color: #344153;
+}
+
+.alert.success {
+  background: #233850;
+  border-color: #3b5b82;
+  color: #b7d0ff;
+}
+
+.alert.error,
+.detail-error,
+.form-error {
+  background: #442d35;
+  border-color: #70424c;
+  color: #ffc4c2;
+}
+
+@media (max-width: 480px) {
+  .detail-stats > div:nth-child(-n + 2),
+  .detail-stats > div:nth-child(3) {
+    border-color: #344153;
+  }
+}

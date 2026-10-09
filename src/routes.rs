@@ -1,10 +1,10 @@
 use crate::{
     auth,
-    core::{error, request_origin_ok, AppState},
+    core::{error, AppState},
     db,
 };
 use axum::{
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -19,11 +19,19 @@ use std::time::Duration;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
-        .route("/healthz", get(|| async { Json(json!({"ok":true})) }))
+        .route("/healthz", get(health))
         .route("/api/status", get(status))
-        .route("/api/setup", post(auth::setup))
-        .route("/api/login", post(auth::login))
+        .route(
+            "/api/setup",
+            post(auth::setup).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
+        .route(
+            "/api/login",
+            post(auth::login).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/api/logout", post(auth::logout))
+        .route("/api/auth/oidc/start", get(crate::sso::start))
+        .route("/api/auth/oidc/callback", get(crate::sso::callback))
         .route("/api/dashboard", get(dashboard))
         .route("/api/updates", get(crate::updates::api))
         .route(
@@ -40,6 +48,10 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/providers", get(list_providers).post(create_provider))
         .route(
+            "/api/notification-providers",
+            get(list_notification_providers).post(create_notification_provider),
+        )
+        .route(
             "/api/automations",
             get(list_automations).post(create_automation),
         )
@@ -53,11 +65,19 @@ pub fn router(state: AppState) -> Router {
             put(update_provider).delete(delete_provider),
         )
         .route(
+            "/api/notification-providers/{id}",
+            put(update_notification_provider).delete(delete_notification_provider),
+        )
+        .route(
             "/api/automations/{id}",
             put(update_automation).delete(delete_automation),
         )
         .route("/api/connections/{id}/test", post(test_connection))
         .route("/api/providers/{id}/test", post(test_provider))
+        .route(
+            "/api/notification-providers/{id}/test",
+            post(test_notification_provider),
+        )
         .route("/api/automations/{id}/run", post(run_automation))
         .route("/api/runs/{id}", get(get_run))
         .route("/api/runs/{id}/cancel", post(cancel_run))
@@ -65,7 +85,20 @@ pub fn router(state: AppState) -> Router {
         .route("/api/schedule/preview", post(schedule_preview))
         .route("/api/webhooks/{connection_id}", post(webhook))
         .route("/api/{*path}", axum::routing::any(api_not_found))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            crate::security::protect,
+        ))
         .with_state(state)
+}
+async fn health(State(state): State<AppState>) -> Response {
+    match sqlx::query_scalar::<_, i64>("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+    {
+        Ok(1) => Json(json!({"ok":true})).into_response(),
+        _ => error(StatusCode::SERVICE_UNAVAILABLE, "Database unavailable"),
+    }
 }
 async fn api_not_found() -> Response {
     error(StatusCode::NOT_FOUND, "API route not found")
@@ -79,7 +112,7 @@ pub(crate) async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Re
         Ok(None) => return Err(error(StatusCode::UNAUTHORIZED, "Authentication required")),
         Err(e) => return Err(error(StatusCode::INTERNAL_SERVER_ERROR, e)),
     }
-    if mutating && !request_origin_ok(h) {
+    if mutating && !state.security.origin_ok(h) {
         return Err(error(
             StatusCode::FORBIDDEN,
             "Invalid request origin or CSRF header",
@@ -88,8 +121,8 @@ pub(crate) async fn guard(state: &AppState, h: &HeaderMap, mutating: bool) -> Re
     Ok(())
 }
 async fn status(State(s): State<AppState>, h: HeaderMap) -> Response {
-    let setup = auth::is_setup_required(&s).await.unwrap_or(true);
-    Json(json!({"setup_required":setup,"authenticated":auth::authenticate(&s,&h).await.ok().flatten().is_some(),"version":env!("CARGO_PKG_VERSION")})).into_response()
+    let setup = s.security.local_login && auth::is_setup_required(&s).await.unwrap_or(true);
+    Json(json!({"setup_required":setup,"authenticated":auth::authenticate(&s,&h).await.ok().flatten().is_some(),"version":env!("CARGO_PKG_VERSION"),"sso_enabled":s.security.oidc.is_some(),"local_login_enabled":s.security.local_login})).into_response()
 }
 async fn list_objects(s: &AppState, h: &HeaderMap, kind: &str) -> Response {
     if let Err(r) = guard(s, h, false).await {
@@ -112,6 +145,9 @@ async fn list_connections(State(s): State<AppState>, h: HeaderMap) -> Response {
 }
 async fn list_providers(State(s): State<AppState>, h: HeaderMap) -> Response {
     list_objects(&s, &h, "providers").await
+}
+async fn list_notification_providers(State(s): State<AppState>, h: HeaderMap) -> Response {
+    list_objects(&s, &h, "notification_providers").await
 }
 async fn list_automations(State(s): State<AppState>, h: HeaderMap) -> Response {
     list_objects(&s, &h, "automations").await
@@ -177,6 +213,25 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
+        "notification_providers" => {
+            if strf("name").trim().is_empty()
+                || !["discord", "slack", "teams", "webhook"].contains(&strf("kind"))
+            {
+                return Err("Notification provider name and supported type are required".into());
+            }
+            let raw = strf("url");
+            if !raw.starts_with("enc:") {
+                let u = url::Url::parse(raw).map_err(|_| "Notification URL is required")?;
+                if !["http", "https"].contains(&u.scheme())
+                    || !u.username().is_empty()
+                    || u.password().is_some()
+                {
+                    return Err(
+                        "Notification URL must use HTTP(S) without embedded credentials".into(),
+                    );
+                }
+            }
+        }
         "automations" => {
             if strf("name").trim().is_empty()
                 || !["review", "fix_pr", "solve_issue", "audit"].contains(&strf("action"))
@@ -215,7 +270,9 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 {
                     return Err("Unsupported notification destination".into());
                 }
-                if !["pr_comment", "issue_comment"].contains(&kind) {
+                if !["pr_comment", "issue_comment"].contains(&kind)
+                    && n["provider_id"].as_str().is_none_or(str::is_empty)
+                {
                     let raw = n["url"].as_str().unwrap_or("");
                     if !raw.starts_with("enc:") {
                         let u = url::Url::parse(raw).map_err(|_| "Notification URL is required")?;
@@ -365,11 +422,13 @@ async fn object_write(
         return error(StatusCode::BAD_REQUEST, "Expected a JSON object");
     }
     let is_create = id.is_none();
+    let object_id = id.clone();
     if let Some(id) = id {
         if let Some(prev) = db::object(&s.db, kind, &id).await.ok().flatten() {
             let secrets = match kind {
                 "connections" => vec!["token", "webhook_secret"],
                 "providers" => vec!["api_key"],
+                "notification_providers" => vec!["url"],
                 _ => vec![],
             };
             for f in secrets {
@@ -395,12 +454,17 @@ async fn object_write(
                             .or_default() += 1;
                     }
                     for n in new.iter_mut() {
+                        if n["provider_id"].as_str().is_some() {
+                            n["url"] = json!("");
+                            continue;
+                        }
                         if !n["url"].as_str().unwrap_or("").is_empty() {
                             continue;
                         }
-                        let by_id = n["id"]
-                            .as_str()
-                            .and_then(|nid| old.iter().find(|o| o["id"].as_str() == Some(nid)));
+                        let by_id = n["id"].as_str().and_then(|nid| {
+                            old.iter()
+                                .find(|o| o["id"].as_str() == Some(nid) && o["kind"] == n["kind"])
+                        });
                         let kind_name = n["kind"].as_str().unwrap_or("");
                         let by_kind = if n["id"].is_null()
                             && new_counts.get(kind_name) == Some(&1)
@@ -439,6 +503,44 @@ async fn object_write(
                 return error(
                     StatusCode::BAD_REQUEST,
                     format!("Unknown {}", key.replace("_id", "")),
+                );
+            }
+        }
+        for n in v["notifications"].as_array().into_iter().flatten() {
+            let Some(id) = n["provider_id"].as_str() else {
+                continue;
+            };
+            let provider = db::object(&s.db, "notification_providers", id)
+                .await
+                .ok()
+                .flatten();
+            if provider.as_ref().is_none_or(|p| p["kind"] != n["kind"]) {
+                return error(
+                    StatusCode::BAD_REQUEST,
+                    "Notification provider is missing or its type does not match",
+                );
+            }
+        }
+    }
+    if kind == "notification_providers" {
+        if let Some(id) = object_id.as_deref() {
+            let type_changed = db::object(&s.db, kind, id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|old| old["kind"] != v["kind"]);
+            if type_changed
+                && db::objects(&s.db, "automations").await.is_ok_and(|items| {
+                    items.iter().any(|a| {
+                        a["notifications"].as_array().is_some_and(|ns| {
+                            ns.iter().any(|n| n["provider_id"].as_str() == Some(id))
+                        })
+                    })
+                })
+            {
+                return error(
+                    StatusCode::CONFLICT,
+                    "Cannot change the type of a notification provider used by an automation",
                 );
             }
         }
@@ -496,6 +598,21 @@ async fn update_provider(
 ) -> Response {
     object_write(s, h, "providers", Some(id), v).await
 }
+async fn create_notification_provider(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    v: Json<Value>,
+) -> Response {
+    object_write(s, h, "notification_providers", None, v).await
+}
+async fn update_notification_provider(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    h: HeaderMap,
+    v: Json<Value>,
+) -> Response {
+    object_write(s, h, "notification_providers", Some(id), v).await
+}
 async fn create_automation(State(s): State<AppState>, h: HeaderMap, v: Json<Value>) -> Response {
     object_write(s, h, "automations", None, v).await
 }
@@ -511,16 +628,23 @@ async fn object_delete(s: AppState, h: HeaderMap, kind: &str, id: String) -> Res
     if let Err(r) = guard(&s, &h, true).await {
         return r;
     }
-    if kind == "connections" || kind == "providers" {
-        let field = if kind == "connections" {
-            "connection_id"
-        } else {
-            "provider_id"
+    if ["connections", "providers", "notification_providers"].contains(&kind) {
+        let field = match kind {
+            "connections" => "connection_id",
+            "providers" => "provider_id",
+            _ => "notification_provider_id",
         };
-        if db::objects(&s.db, "automations")
-            .await
-            .is_ok_and(|items| items.iter().any(|a| a[field].as_str() == Some(&id)))
-        {
+        if db::objects(&s.db, "automations").await.is_ok_and(|items| {
+            items.iter().any(|a| {
+                if kind == "notification_providers" {
+                    a["notifications"]
+                        .as_array()
+                        .is_some_and(|ns| ns.iter().any(|n| n["provider_id"].as_str() == Some(&id)))
+                } else {
+                    a[field].as_str() == Some(&id)
+                }
+            })
+        }) {
             return error(StatusCode::CONFLICT, "Object is used by an automation");
         }
     }
@@ -543,6 +667,13 @@ async fn delete_provider(
     h: HeaderMap,
 ) -> Response {
     object_delete(s, h, "providers", id).await
+}
+async fn delete_notification_provider(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    h: HeaderMap,
+) -> Response {
+    object_delete(s, h, "notification_providers", id).await
 }
 async fn delete_automation(
     State(s): State<AppState>,
@@ -603,13 +734,20 @@ pub(crate) async fn run_queue(
             "schedule-{}",
             &hex::encode(Sha256::digest(identity.as_bytes()))[..32]
         )
+    } else if let Some(delivery) = trigger["delivery_identity"].as_str() {
+        use sha2::Digest;
+        let identity = format!("{automation_id}|{delivery}");
+        format!(
+            "webhook-{}",
+            hex::encode(Sha256::digest(identity.as_bytes()))
+        )
     } else {
         uuid::Uuid::new_v4().to_string()
     };
     let now = chrono::Utc::now().to_rfc3339();
     let run = json!({"id":id,"automation_id":automation_id,"automation_name":automation["name"],"automation_version":automation["updated_at"],"status":"queued","trigger":trigger,"created_at":now,"started_at":null,"finished_at":null,"error":null,"output":null});
     let inserted = sqlx::query(
-        "INSERT OR IGNORE INTO runs(id,automation_id,body,created_at,status) VALUES(?,?,?,?,?)",
+        "INSERT OR IGNORE INTO runs(id,automation_id,body,created_at,status) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM runs WHERE status='queued') < 1000",
     )
     .bind(&id)
     .bind(&automation_id)
@@ -619,11 +757,13 @@ pub(crate) async fn run_queue(
     .execute(&s.db)
     .await?;
     if inserted.rows_affected() == 0 {
-        let saved: String = sqlx::query_scalar("SELECT body FROM runs WHERE id=?")
+        let saved: Option<String> = sqlx::query_scalar("SELECT body FROM runs WHERE id=?")
             .bind(&id)
-            .fetch_one(&s.db)
+            .fetch_optional(&s.db)
             .await?;
-        return Ok(serde_json::from_str(&saved)?);
+        return Ok(serde_json::from_str(&saved.ok_or_else(|| {
+            anyhow::anyhow!("Run queue is full; retry later")
+        })?)?);
     }
     Ok(run)
 }
@@ -668,6 +808,10 @@ async fn recover_runs(s: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 async fn process_queued(s: &AppState) -> anyhow::Result<bool> {
+    let update_guard = s.update_lock.lock().await;
+    if *s.restart.borrow() {
+        return Ok(false);
+    }
     let mut tx = s.db.begin().await?;
     let row =
         sqlx::query("SELECT id,body FROM runs WHERE status='queued' ORDER BY created_at LIMIT 1")
@@ -688,6 +832,7 @@ async fn process_queued(s: &AppState) -> anyhow::Result<bool> {
             .execute(&mut *tx)
             .await?;
     tx.commit().await?;
+    drop(update_guard);
     if update.rows_affected() == 0 {
         return Ok(false);
     }
@@ -736,6 +881,7 @@ async fn execute_run(
         )
     }
     s.reveal("automations", &mut automation)?;
+    resolve_notification_providers(s, &mut automation).await?;
     let mut conn = db::object(
         &s.db,
         "connections",
@@ -769,6 +915,29 @@ async fn execute_run(
     tokio::pin!(future);
     tokio::select! {_ = tokio::time::sleep(Duration::from_secs(timeout))=>Err(anyhow::anyhow!("Run timed out after {timeout} seconds")),_ = cancel_rx.changed()=>Err(anyhow::anyhow!("Run cancelled")),result=&mut future=>result}
 }
+async fn resolve_notification_providers(
+    s: &AppState,
+    automation: &mut Value,
+) -> anyhow::Result<()> {
+    let Some(notifications) = automation["notifications"].as_array_mut() else {
+        return Ok(());
+    };
+    for notification in notifications {
+        let Some(id) = notification["provider_id"].as_str().map(str::to_owned) else {
+            continue;
+        };
+        let mut provider = db::object(&s.db, "notification_providers", &id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("notification provider not found"))?;
+        s.reveal("notification_providers", &mut provider)?;
+        anyhow::ensure!(
+            provider["kind"] == notification["kind"],
+            "notification provider type does not match automation"
+        );
+        notification["url"] = provider["url"].clone();
+    }
+    Ok(())
+}
 async fn redact_error(s: &AppState, run: &Value, error: &str) -> String {
     let mut secrets = vec![];
     if let Ok(Some(mut a)) = db::object(
@@ -779,6 +948,7 @@ async fn redact_error(s: &AppState, run: &Value, error: &str) -> String {
     .await
     {
         let _ = s.reveal("automations", &mut a);
+        let _ = resolve_notification_providers(s, &mut a).await;
         for n in a["notifications"].as_array().into_iter().flatten() {
             if let Some(x) = n["url"].as_str() {
                 if !x.is_empty() {
@@ -1074,6 +1244,33 @@ async fn test_provider(
         Err(e) => Json(json!({"ok":false,"message":e.to_string()})).into_response(),
     }
 }
+async fn test_notification_provider(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    h: HeaderMap,
+) -> Response {
+    if let Err(r) = guard(&s, &h, true).await {
+        return r;
+    }
+    let mut p = match db::object(&s.db, "notification_providers", &id).await {
+        Ok(Some(x)) => x,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "Notification provider not found"),
+        Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    if let Err(e) = s.reveal("notification_providers", &mut p) {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    match crate::notifications::send(
+        &p,
+        "Diffrook test notification. This channel is configured correctly.",
+        &s.client,
+    )
+    .await
+    {
+        Ok(()) => Json(json!({"ok":true,"message":"Test notification sent"})).into_response(),
+        Err(e) => Json(json!({"ok":false,"message":e.to_string()})).into_response(),
+    }
+}
 
 async fn webhook(
     State(s): State<AppState>,
@@ -1111,7 +1308,12 @@ async fn webhook(
         })
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
-    if signature.is_empty() || delivery.is_empty() || event.is_empty() {
+    if signature.is_empty()
+        || delivery.is_empty()
+        || event.is_empty()
+        || delivery.len() > 256
+        || event.len() > 128
+    {
         return error(
             StatusCode::UNAUTHORIZED,
             "Missing signature or delivery headers",
@@ -1142,11 +1344,15 @@ async fn webhook(
         Ok(x) => x,
         Err(_) => return error(StatusCode::BAD_REQUEST, "Invalid JSON body"),
     };
-    let insert=sqlx::query("INSERT OR IGNORE INTO webhook_deliveries(connection_id,delivery_id,created_at) VALUES(?,?,?)").bind(&connection_id).bind(delivery).bind(chrono::Utc::now().to_rfc3339()).execute(&s.db).await;
-    match insert {
-        Ok(x) if x.rows_affected() == 0 => {
-            return Json(json!({"ok":true,"duplicate":true,"queued":0})).into_response()
-        }
+    let received = sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM webhook_deliveries WHERE connection_id=? AND delivery_id=?",
+    )
+    .bind(&connection_id)
+    .bind(delivery)
+    .fetch_one(&s.db)
+    .await;
+    match received {
+        Ok(1) => return Json(json!({"ok":true,"duplicate":true,"queued":0})).into_response(),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
         _ => (),
     }
@@ -1181,6 +1387,11 @@ async fn webhook(
             .cloned()
             .unwrap_or_default();
         if !events.iter().any(|e| e.as_str() == Some(action)) {
+            continue;
+        }
+        if (a["action"] == "solve_issue" && kind != "issue")
+            || (a["action"] == "fix_pr" && kind != "pull_request")
+        {
             continue;
         }
         if action == "issue_comment.command"
@@ -1248,10 +1459,21 @@ async fn webhook(
             }
         }
         let id = a["id"].as_str().unwrap_or("").to_owned();
-        let tr = json!({"kind":kind,"repository":repo,"number":number,"branch":branch,"event":event,"actor":actor,"payload":payload});
-        if run_queue(s.clone(), id, tr).await.is_ok() {
-            queued += 1
+        let tr = json!({"kind":kind,"repository":repo,"number":number,"branch":branch,"event":event,"actor":actor,"payload":payload,"delivery_identity":format!("{connection_id}|{delivery}")});
+        match run_queue(s.clone(), id, tr).await {
+            Ok(_) => queued += 1,
+            Err(_) => {
+                return error(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "Webhook could not be queued; retry this delivery",
+                )
+            }
         }
+    }
+    // Mark complete only after all matching jobs are durable. Stable run IDs make
+    // retries safe even if an earlier attempt queued only some of the automations.
+    if let Err(e) = sqlx::query("INSERT OR IGNORE INTO webhook_deliveries(connection_id,delivery_id,created_at) VALUES(?,?,?)").bind(&connection_id).bind(delivery).bind(chrono::Utc::now().to_rfc3339()).execute(&s.db).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
     Json(json!({"ok":true,"queued":queued})).into_response()
 }
@@ -1323,6 +1545,17 @@ fn webhook_target(p: &Value, event: &str) -> Option<WebhookTarget> {
 mod tests {
     use super::*;
     use chrono::{Datelike, TimeZone, Timelike};
+    #[tokio::test]
+    async fn update_restart_prevents_claiming_queued_jobs() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::new(dir.path()).await.unwrap();
+        let update_guard = state.update_lock.lock().await;
+        let worker_state = state.clone();
+        let worker = tokio::spawn(async move { process_queued(&worker_state).await });
+        state.restart.send_replace(true);
+        drop(update_guard);
+        assert!(!worker.await.unwrap().unwrap());
+    }
     #[test]
     fn five_field_cron_uses_standard_weekday_numbers() {
         let normalized = normalize_cron("0 9 * * 1").unwrap();

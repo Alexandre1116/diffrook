@@ -122,7 +122,7 @@ async fn latest_available(state: &AppState) -> Option<String> {
 async fn install(state: &AppState, tag: &str) -> Result<()> {
     let _update_guard = state.update_lock.lock().await;
     anyhow::ensure!(
-        !state.data_dir.join("active-update.json").exists(),
+        can_stage_update(&state.data_dir)?,
         "an update is already staged for restart"
     );
     let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
@@ -197,12 +197,22 @@ async fn install(state: &AppState, tag: &str) -> Result<()> {
         "Installing Diffrook {}; the service will restart",
         release["version"]
     );
-    let restart = state.restart.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        let _ = restart.send(true);
-    });
+    // The HTTP server drains this response before exiting. Signal while still
+    // holding the worker's claim lock, so no queued job starts during restart.
+    state.restart.send_replace(true);
     Ok(())
+}
+
+fn can_stage_update(data_dir: &Path) -> Result<bool> {
+    let path = data_dir.join("active-update.json");
+    if !path.exists() {
+        return Ok(true);
+    }
+    let descriptor: Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    // Keep the confirmed descriptor so container restarts still launch the
+    // installed binary, while allowing its next update to replace it.
+    Ok(descriptor["confirmed"] == true
+        && descriptor["version"].as_str() == Some(env!("CARGO_PKG_VERSION")))
 }
 
 fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> {
@@ -473,6 +483,30 @@ mod rollback_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn confirmed_current_update_can_be_replaced_but_pending_update_cannot() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("active-update.json");
+        assert!(can_stage_update(dir.path()).unwrap());
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({"version":env!("CARGO_PKG_VERSION"),"confirmed":true}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(can_stage_update(dir.path()).unwrap());
+        assert!(path.exists(), "restart descriptor must be retained");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&json!({"version":env!("CARGO_PKG_VERSION"),"confirmed":false}))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(!can_stage_update(dir.path()).unwrap());
+        std::fs::write(&path, "invalid").unwrap();
+        assert!(can_stage_update(dir.path()).is_err());
+    }
     use std::io::Write;
     #[test]
     fn extracts_only_bounded_regular_files_from_release_package() {

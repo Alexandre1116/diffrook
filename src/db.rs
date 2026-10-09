@@ -24,13 +24,27 @@ pub async fn open(path: &str) -> anyhow::Result<SqlitePool> {
         "CREATE TABLE IF NOT EXISTS objects (kind TEXT NOT NULL, id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(kind,id))",
         "CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, automation_id TEXT NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL)",
         "CREATE INDEX IF NOT EXISTS runs_created ON runs(created_at DESC)",
+        "CREATE INDEX IF NOT EXISTS runs_queue ON runs(status,created_at)",
         "CREATE TABLE IF NOT EXISTS webhook_deliveries (connection_id TEXT NOT NULL, delivery_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(connection_id,delivery_id))",
         "CREATE TABLE IF NOT EXISTS scheduler_marks (automation_id TEXT PRIMARY KEY, last_slot TEXT NOT NULL)",
         "CREATE TABLE IF NOT EXISTS scheduler_marks_v2 (automation_id TEXT NOT NULL, repository TEXT NOT NULL, last_slot TEXT NOT NULL, PRIMARY KEY(automation_id,repository))",
         "CREATE TABLE IF NOT EXISTS app_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS oidc_logins (state_hash TEXT PRIMARY KEY, binding_hash TEXT NOT NULL, nonce TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS sso_identities (issuer TEXT NOT NULL, subject TEXT NOT NULL, user_id TEXT NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE, email TEXT, email_verified INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(issuer,subject))",
     ] {
         sqlx::query(sql).execute(&pool).await.context("initialize SQLite schema")?;
     }
+    let columns: Vec<String> = sqlx::query_scalar("SELECT name FROM pragma_table_info('sessions')")
+        .fetch_all(&pool)
+        .await?;
+    if !columns.iter().any(|name| name == "auth_method") {
+        sqlx::query("ALTER TABLE sessions ADD COLUMN auth_method TEXT NOT NULL DEFAULT 'local'")
+            .execute(&pool)
+            .await?;
+    }
+    sqlx::query("CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires_at)")
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }
 

@@ -5,6 +5,7 @@
 /.tools/
 /.qa/
 .env
+/secrets/
 *.db
 *.db-shm
 *.db-wal

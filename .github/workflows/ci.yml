@@ -25,7 +25,30 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
+      - name: Dependency security audit
+        run: |
+          cargo install cargo-audit --locked
+          # OIDC verifies public signatures only. No RSA private-key operations.
+          # Review this scoped exception if cryptographic usage changes.
+          # See docs/sso-and-internet.md for RUSTSEC-2023-0071 and its scope.
+          cargo audit --ignore RUSTSEC-2023-0071
       - run: docker build -t diffrook:test .
+      - name: Container integration smoke test
+        run: |
+          docker run -d --name diffrook-smoke -p 127.0.0.1:18080:8080 \
+            --add-host host.docker.internal:host-gateway \
+            -e DIFFROOK_SETUP_TOKEN=smoke-setup-token diffrook:test
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18080/healthz; then break; fi
+            sleep 1
+          done
+          node scripts/smoke.mjs
+        env:
+          DIFFROOK_TEST_URL: http://127.0.0.1:18080
+          DIFFROOK_TEST_SETUP_TOKEN: smoke-setup-token
+      - name: Clean up smoke container
+        if: always()
+        run: docker rm -f -v diffrook-smoke || true
 
   release-package:
     if: github.event_name == 'release' && github.event.action == 'published'

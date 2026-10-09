@@ -21,11 +21,16 @@ The container runs as UID 10001 without a Docker socket, privileged access, or a
 
 ## Configure an automation
 
+For company SSO and Internet access, see [SSO and HTTPS deployment](docs/sso-and-internet.md).
+Each installation configures its own hostname and OpenID Connect provider, with an
+explicit administrator allowlist. SSO defaults to disabling password login.
+
 1. Create a GitHub or Forgejo connection with a bot account token and webhook secret.
 2. Create an AI provider and test the connection.
-3. Create an automation. Select repositories, model, trigger, filters, action, limits and notification destinations.
-4. Configure a webhook in the repository, or use scheduled and manual runs.
-5. Inspect each run in the web interface. Findings include the location, explanation, severity and suggested correction.
+3. Add reusable destinations in **Notifications**. Discord, Slack, Teams and generic webhook URLs are encrypted at rest and can be test-sent from this page.
+4. Create an automation. Select repositories, model, trigger, filters, action, limits and notification destinations.
+5. Configure a webhook in the repository, or use scheduled and manual runs.
+6. Inspect each run in the web interface. Findings include the location, explanation, severity and suggested correction.
 
 Typical automations include reviewing a newly opened PR, auditing a branch every Monday at 09:00 in a selected timezone, and creating a fix PR for an issue carrying a selected label.
 

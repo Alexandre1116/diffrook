@@ -8,5 +8,7 @@ pub mod providers;
 pub mod routes;
 pub mod scheduler;
 pub mod scm;
+pub mod security;
+pub mod sso;
 pub mod types;
 pub mod updates;

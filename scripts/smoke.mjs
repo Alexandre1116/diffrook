@@ -100,7 +100,7 @@ async function waitForIdle() {
 }
 async function check(name, fn) { await fn(); report.push(name); console.log(`PASS ${name}`); }
 const automation = (connectionId, providerId, overrides = {}) => ({ name: 'Integration review', description: 'Local mock services only', enabled: true, connection_id: connectionId, provider_id: providerId, model: 'test-model', repositories: ['acme/demo'], trigger: { events: ['pull_request.opened', 'issue_comment.command'], command: '/diffrook', schedule_enabled: false, cron: '0 9 * * 1', timezone: 'Europe/Lisbon', schedule_target: 'repository', branch: 'main' }, filters: { labels: [], ignore_drafts: true, allowed_actors: ['developer'], ignore_paths: [] }, action: 'review', instructions: 'CHECK_AUTOMATION_INSTRUCTIONS_ARE_USED', limits: { max_files: 200, max_file_bytes: 64000, max_context_chars: 180000, max_output_tokens: 6000, timeout_seconds: 60, max_fix_files: 10 }, notifications: [{ kind: 'pr_comment', url: '' }], fix: { mode: 'new_branch', branch_prefix: 'diffrook/' }, ...overrides });
-let gh, forgejo, provider, auto;
+let gh, forgejo, provider, auto, notificationProvider;
 try {
   await check('Setup and authentication', async () => {
     const status = await api('/api/status');
@@ -141,6 +141,15 @@ try {
       const parts = new Intl.DateTimeFormat('en-GB', { weekday: 'long', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Lisbon' }).format(new Date(date));
       assert.match(parts, /Monday/); assert.match(parts, /09:00/);
     }
+  });
+  await check('Reusable notification providers are masked and testable', async () => {
+    notificationProvider = await api('/api/notification-providers', 'POST', { name: 'Mock Slack', kind: 'slack', url: `${mockOrigin}/notify?global=1` });
+    assert.equal(notificationProvider.url, '');
+    assert.equal(notificationProvider.has_url, true);
+    assert.equal((await api(`/api/notification-providers/${notificationProvider.id}/test`, 'POST', {})).ok, true);
+    assert.equal(traffic.findLast(t => t.path === '/notify').body.text.includes('test notification'), true);
+    await api(`/api/notification-providers/${notificationProvider.id}`, 'PUT', { ...notificationProvider, name: 'Mock Slack edited' });
+    assert.equal((await api('/api/notification-providers'))[0].has_url, true);
   });
   await check('GitHub PR review and contextual comment', async () => {
     auto = await api('/api/automations', 'POST', automation(gh.id, provider.id));
@@ -195,9 +204,15 @@ try {
   });
   await check('Selected notification adapters and masked URL updates', async () => {
     await waitForIdle();
-    const kinds = ['discord', 'slack', 'teams', 'webhook'];
-    const a = await api('/api/automations', 'POST', automation(gh.id, provider.id, { name: 'Notification audit', action: 'audit', notifications: kinds.map(kind => ({ kind, url: `${mockOrigin}/notify?kind=${kind}` })) }));
-    assert.ok(a.notifications.every(n => n.url === '' && n.has_url));
+    const a = await api('/api/automations', 'POST', automation(gh.id, provider.id, { name: 'Notification audit', action: 'audit', notifications: [
+      { kind: 'discord', url: `${mockOrigin}/notify?kind=discord` },
+      { kind: 'slack', provider_id: notificationProvider.id },
+      { kind: 'teams', url: `${mockOrigin}/notify?kind=teams` },
+      { kind: 'webhook', url: `${mockOrigin}/notify?kind=webhook` },
+    ] }));
+    assert.equal(a.notifications[1].provider_id, notificationProvider.id);
+    assert.ok(a.notifications[1].url === '');
+    assert.ok(a.notifications.slice(0, 1).concat(a.notifications.slice(2)).every(n => n.url === '' && n.has_url));
     await api(`/api/automations/${a.id}`, 'PUT', { ...a, name: 'Notification audit edited' });
     const start = traffic.length;
     const run = await waitForRun((await api(`/api/automations/${a.id}/run`, 'POST', { kind: 'repository', repository: 'acme/demo', branch: 'main' })).id);
@@ -207,6 +222,7 @@ try {
     assert.deepEqual(sent[0].body.allowed_mentions.parse, []);
     assert.equal(sent[2].body.attachments[0].content.type, 'AdaptiveCard');
     assert.ok(!traffic.slice(start).some(t => t.method === 'POST' && /\/issues\/\d+\/comments$/.test(t.path)));
+    await api(`/api/notification-providers/${notificationProvider.id}`, 'DELETE', undefined, { status: 409 });
   });
   await check('Cancellation stops a slow model execution', async () => {
     slow = true;

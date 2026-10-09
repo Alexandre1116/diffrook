@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowDownRight,
   ArrowRight,
   Bot,
+  BellRing,
   Boxes,
   CalendarClock,
   Check,
@@ -24,6 +25,8 @@ import {
   LoaderCircle,
   LogOut,
   Menu,
+  MessageCircle,
+  MessageSquareText,
   MoreHorizontal,
   Play,
   Plus,
@@ -37,6 +40,7 @@ import {
   Terminal,
   Trash2,
   TriangleAlert,
+  Webhook,
   X,
   XCircle,
 } from "lucide-react";
@@ -46,6 +50,7 @@ type Page =
   | "automations"
   | "connections"
   | "providers"
+  | "notifications"
   | "runs"
   | "settings";
 type Obj = Record<string, any>;
@@ -53,6 +58,8 @@ type Status = {
   setup_required: boolean;
   authenticated: boolean;
   version: string;
+  sso_enabled: boolean;
+  local_login_enabled: boolean;
 };
 
 async function api<T = any>(
@@ -125,6 +132,7 @@ const nav: { id: Page; label: string; icon: any }[] = [
   { id: "automations", label: "Automations", icon: Bot },
   { id: "connections", label: "Connections", icon: GitBranch },
   { id: "providers", label: "AI providers", icon: Sparkles },
+  { id: "notifications", label: "Notifications", icon: BellRing },
   { id: "runs", label: "Run history", icon: FileClock },
 ];
 const date = (s?: string) =>
@@ -156,6 +164,7 @@ function App() {
       automations: Obj[];
       connections: Obj[];
       providers: Obj[];
+      notificationProviders: Obj[];
       runs: Obj[];
       updates: Obj;
     }>({
@@ -163,6 +172,7 @@ function App() {
       automations: [],
       connections: [],
       providers: [],
+      notificationProviders: [],
       runs: [],
       updates: { releases: [], policy: "manual" },
     });
@@ -170,23 +180,26 @@ function App() {
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [mobile, setMobile] = useState(false),
+    [accountMenu, setAccountMenu] = useState(false),
     [query, setQuery] = useState("");
   const [modal, setModal] = useState<{ kind: string; item?: Obj } | null>(null),
     [detail, setDetail] = useState<Obj | null>(null);
+  const accountMenuRef = useRef<HTMLDivElement>(null);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
     try {
-      const [dashboard, automations, connections, providers, runs, updates] =
+      const [dashboard, automations, connections, providers, notificationProviders, runs, updates] =
         await Promise.all([
           api("/dashboard"),
           api("/automations"),
           api("/connections"),
           api("/providers"),
+          api("/notification-providers"),
           api("/runs"),
           api("/updates"),
         ]);
-      setData({ dashboard, automations, connections, providers, runs, updates });
+      setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -194,6 +207,10 @@ function App() {
     }
   }, [status?.authenticated]);
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).has("sso_error")) {
+      setError("SSO sign-in failed. Your account may not be authorized. Try again or contact your administrator.");
+      window.history.replaceState({}, "", window.location.pathname);
+    }
     api<Status>("/status")
       .then(setStatus)
       .catch((e) => setError(e.message));
@@ -221,6 +238,22 @@ function App() {
       return () => clearTimeout(t);
     }
   }, [notice]);
+  useEffect(() => {
+    if (!accountMenu) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!accountMenuRef.current?.contains(event.target as Node))
+        setAccountMenu(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setAccountMenu(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsideClick);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsideClick);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [accountMenu]);
   const runDetail = async (r: Obj) => {
     try {
       setDetail(await api(`/runs/${r.id}`));
@@ -259,6 +292,15 @@ function App() {
       setBusy(false);
     }
   };
+  const signOut = async () => {
+    try {
+      await api("/logout", "POST");
+      setAccountMenu(false);
+      setStatus(await api("/status"));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
   if (!status)
     return (
       <div className="splash">
@@ -271,6 +313,8 @@ function App() {
     return (
       <Auth
         setup={status.setup_required}
+        sso={status.sso_enabled}
+        localLogin={status.local_login_enabled}
         error={error}
         busy={busy}
         submit={login}
@@ -323,30 +367,40 @@ function App() {
             <span className="live-dot" />
             Instance reachable<span className="version">v{status.version}</span>
           </div>
-          <button
-            className={`nav-item ${page === "settings" ? "selected" : ""}`}
-            onClick={() => setPage("settings")}
-          >
-            <Settings2 size={17} />
-            Settings
-          </button>
-          <button
-            className="nav-item"
-            onClick={async () => {
-              await api("/logout", "POST");
-              setStatus(await api("/status"));
-            }}
-          >
-            <LogOut size={17} />
-            Sign out
-          </button>
-          <div className="user-row">
-            <div className="avatar">A</div>
-            <span>
-              <b>Administrator</b>
-              <small>Local account</small>
-            </span>
-            <MoreHorizontal size={18} />
+          <div className="account-wrap" ref={accountMenuRef}>
+            {accountMenu && (
+              <div className="account-menu" id="account-menu">
+                <button onClick={() => {
+                  setPage("settings");
+                  setAccountMenu(false);
+                  setMobile(false);
+                }}>
+                  <Settings2 size={16} />
+                  Settings
+                </button>
+                <button onClick={() => void signOut()}>
+                  <LogOut size={16} />
+                  Sign out
+                </button>
+              </div>
+            )}
+            <div className="user-row">
+              <div className="avatar">A</div>
+              <span>
+                <b>Administrator</b>
+                <small>Local account</small>
+              </span>
+              <button
+                className="account-menu-toggle"
+                aria-label="Account menu"
+                aria-haspopup="menu"
+                aria-controls="account-menu"
+                aria-expanded={accountMenu}
+                onClick={() => setAccountMenu((open) => !open)}
+              >
+                <MoreHorizontal size={18} />
+              </button>
+            </div>
           </div>
         </div>
       </aside>
@@ -506,6 +560,28 @@ function App() {
               }}
             />
           )}
+          {page === "notifications" && (
+            <ResourcePage
+              kind="notification"
+              items={data.notificationProviders}
+              query={query}
+              setQuery={setQuery}
+              create={() => setModal({
+                kind: "notification",
+                item: { name: "", kind: "discord", url: "" },
+              })}
+              edit={(item) => setModal({ kind: "notification", item })}
+              remove={(item) => void mutate(`/notification-providers/${item.id}`, "DELETE")}
+              test={async (item) => {
+                try {
+                  const r = await api(`/notification-providers/${item.id}/test`, "POST", {});
+                  r.ok ? setNotice(r.message) : setError(r.message);
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            />
+          )}
           {page === "runs" && (
             <RunsPage
               items={data.runs}
@@ -553,7 +629,11 @@ function App() {
                   ? modal.item?.id
                     ? "Edit AI provider"
                     : "Add AI provider"
-                  : "Run automation"
+                  : modal.kind === "notification"
+                    ? modal.item?.id
+                      ? "Edit notification destination"
+                      : "Add notification destination"
+                    : "Run automation"
           }
           close={() => setModal(null)}
           wide={modal.kind === "automation"}
@@ -564,6 +644,7 @@ function App() {
               item={modal.item!}
               connections={data.connections}
               providers={data.providers}
+              notificationProviders={data.notificationProviders}
               save={(v) =>
                 void mutate(
                   `/automations${v.id ? `/${v.id}` : ""}`,
@@ -573,13 +654,13 @@ function App() {
               }
               cancel={() => setModal(null)}
             />
-          ) : modal.kind === "connection" || modal.kind === "provider" ? (
+          ) : modal.kind === "connection" || modal.kind === "provider" || modal.kind === "notification" ? (
             <ResourceForm
               kind={modal.kind}
               item={modal.item!}
               save={(v) =>
                 void mutate(
-                  `/${modal.kind === "connection" ? "connections" : "providers"}${v.id ? `/${v.id}` : ""}`,
+                  `/${modal.kind === "connection" ? "connections" : modal.kind === "provider" ? "providers" : "notification-providers"}${v.id ? `/${v.id}` : ""}`,
                   v.id ? "PUT" : "POST",
                   v,
                 )
@@ -641,11 +722,15 @@ function App() {
 }
 function Auth({
   setup,
+  sso,
+  localLogin,
   error,
   busy,
   submit,
 }: {
   setup: boolean;
+  sso: boolean;
+  localLogin: boolean;
   error: string;
   busy: boolean;
   submit: (e: React.FormEvent<HTMLFormElement>) => void;
@@ -665,7 +750,13 @@ function Auth({
             ? "Create the administrator account for this Diffrook instance."
             : "Sign in to manage your repository automations."}
         </p>
-        <form onSubmit={submit} className="form-stack">
+        {sso && (
+          <a className="btn primary full" href="/api/auth/oidc/start">
+            <ShieldCheck size={17} /> Sign in with SSO
+          </a>
+        )}
+        {sso && localLogin && <p className="auth-separator">Or use your local administrator account</p>}
+        {localLogin && <form onSubmit={submit} className="form-stack">
           {setup && (
             <label>
               Setup token
@@ -723,7 +814,8 @@ function Auth({
             )}{" "}
             {setup ? "Create administrator" : "Sign in"}
           </button>
-        </form>
+        </form>}
+        {!localLogin && error && <div className="form-error" role="alert"><TriangleAlert size={16} />{error}</div>}
         <div className="auth-foot">
           <ShieldCheck size={15} /> Your instance. Your repositories. Your
           rules.
@@ -1280,7 +1372,7 @@ function ResourcePage({
   remove,
   test,
 }: {
-  kind: "connection" | "provider";
+  kind: "connection" | "provider" | "notification";
   items: Obj[];
   query: string;
   setQuery: (s: string) => void;
@@ -1290,6 +1382,7 @@ function ResourcePage({
   test: (o: Obj) => void;
 }) {
   const isConn = kind === "connection";
+  const isNotif = kind === "notification";
   const filtered = items.filter((x) =>
     `${x.name} ${x.kind} ${x.base_url}`
       .toLowerCase()
@@ -1300,25 +1393,27 @@ function ResourcePage({
       <div className="page-head">
         <div>
           <div className="eyebrow">
-            {isConn ? "SOURCE CONTROL" : "MODEL ACCESS"}
+            {isConn ? "SOURCE CONTROL" : isNotif ? "DELIVERY CHANNELS" : "MODEL ACCESS"}
           </div>
-          <h1>{isConn ? "Connections" : "AI providers"}</h1>
+          <h1>{isConn ? "Connections" : isNotif ? "Notification providers" : "AI providers"}</h1>
           <p>
             {isConn
               ? "Connect GitHub or Forgejo so Diffrook can read and act on repository events."
-              : "Choose the models that power reviews, issue fixes, and audits."}
+              : isNotif
+                ? "Configure reusable Discord, Slack, Teams, or webhook destinations for your automations."
+                : "Choose the models that power reviews, issue fixes, and audits."}
           </p>
         </div>
         <button className="btn primary" onClick={create}>
           <Plus size={16} />
-          {isConn ? "Add connection" : "Add provider"}
+          {isConn ? "Add connection" : isNotif ? "Add destination" : "Add provider"}
         </button>
       </div>
       <div className="notice-strip">
         <ShieldCheck size={17} />
         <span>
           <b>Secrets are encrypted at rest.</b>{" "}
-          {isConn ? "Tokens and webhook secrets" : "API keys"} are never shown
+          {isConn ? "Tokens and webhook secrets" : isNotif ? "Webhook URLs" : "API keys"} are never shown
           again after saving. Leave a secret field empty to keep its current
           value.
         </span>
@@ -1327,7 +1422,7 @@ function ResourcePage({
         <div className="searchbox">
           <Search size={16} />
           <input
-            placeholder={`Search ${isConn ? "connections" : "providers"}`}
+            placeholder={`Search ${isConn ? "connections" : isNotif ? "notification destinations" : "providers"}`}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
@@ -1345,6 +1440,8 @@ function ResourcePage({
                   ) : (
                     <GitBranch size={20} />
                   )
+                ) : isNotif ? (
+                  item.kind === "discord" ? <MessageCircle size={20} /> : item.kind === "slack" ? <MessageSquareText size={20} /> : item.kind === "webhook" ? <Webhook size={20} /> : <BellRing size={20} />
                 ) : (
                   <Sparkles size={20} />
                 )}
@@ -1354,7 +1451,7 @@ function ResourcePage({
                   <h3>{item.name}</h3>
                   <span className="kind-badge">{item.kind}</span>
                 </div>
-                <p>{item.base_url || "Default endpoint"}</p>
+                <p>{isNotif ? (item.has_url ? "Webhook URL securely saved" : "No webhook URL saved") : item.base_url || "Default endpoint"}</p>
                 <div className="resource-details">
                   {isConn ? (
                     <>
@@ -1372,6 +1469,11 @@ function ResourcePage({
                         </span>
                       )}
                     </>
+                  ) : isNotif ? (
+                    <span>
+                      <KeyRound size={13} />
+                      {item.has_url ? "Destination URL saved" : "URL required"}
+                    </span>
                   ) : (
                     <>
                       <span>
@@ -1394,7 +1496,7 @@ function ResourcePage({
                   onClick={() => test(item)}
                 >
                   <Radio size={14} />
-                  Test connection
+                  {isNotif ? "Send test" : "Test connection"}
                 </button>
                 <button
                   className="icon-btn"
@@ -1420,20 +1522,22 @@ function ResourcePage({
             icon={isConn ? GitBranch : Sparkles}
             title={
               query
-                ? "No matching records"
-                : `No ${isConn ? "connections" : "providers"} yet`
+              ? "No matching records"
+              : isConn ? "No connections yet" : isNotif ? "No notification destinations yet" : "No providers yet"
             }
             body={
               isConn
                 ? "Add a code host to give automations access to your repositories."
-                : "Add a provider to choose the model used by your automations."
+                : isNotif
+                  ? "Add a destination once, then reuse it across any automation. Webhook URLs are encrypted at rest."
+                  : "Add a provider to choose the model used by your automations."
             }
             action={
               query
                 ? undefined
                 : isConn
                   ? "Add your first connection"
-                  : "Add your first provider"
+                  : isNotif ? "Add your first destination" : "Add your first provider"
             }
             onAction={create}
           />
@@ -1540,6 +1644,7 @@ function SettingsPage({
       automations: data.automations,
       connections: data.connections,
       providers: data.providers,
+      notification_providers: data.notificationProviders,
     };
     const blob = new Blob([JSON.stringify(sanitized, null, 2)], {
       type: "application/json",
@@ -1682,12 +1787,13 @@ function ResourceForm({
   save,
   cancel,
 }: {
-  kind: "connection" | "provider";
+  kind: "connection" | "provider" | "notification";
   item: Obj;
   save: (v: Obj) => void;
   cancel: () => void;
 }) {
   const isConn = kind === "connection";
+  const isNotif = kind === "notification";
   const [v, setV] = useState<Obj>({ ...item });
   const [err, setErr] = useState("");
   const [show, setShow] = useState(false);
@@ -1695,6 +1801,7 @@ function ResourceForm({
     setV((x: Obj) => ({ ...x, [k]: val }));
   const choose = (k: string) => {
     change("kind", k);
+    if (isNotif) return;
     if (isConn)
       change("base_url", k === "github" ? "https://api.github.com" : "");
     else
@@ -1726,7 +1833,7 @@ function ResourceForm({
             value={v.name || ""}
             onChange={(e) => change("name", e.target.value)}
             placeholder={
-              isConn ? "Production GitHub" : "Primary model provider"
+              isConn ? "Production GitHub" : isNotif ? "Engineering Discord" : "Primary model provider"
             }
             required
           />
@@ -1736,7 +1843,7 @@ function ResourceForm({
           <select value={v.kind} onChange={(e) => choose(e.target.value)}>
             {(isConn
               ? ["github", "forgejo"]
-              : ["openai", "ollama", "anthropic"]
+              : isNotif ? ["discord", "slack", "teams", "webhook"] : ["openai", "ollama", "anthropic"]
             ).map((x) => (
               <option key={x} value={x}>
                 {x === "github"
@@ -1746,13 +1853,41 @@ function ResourceForm({
                     : x === "openai"
                       ? "OpenAI"
                       : x === "ollama"
-                        ? "Ollama"
-                        : "Anthropic"}
+                      ? "Ollama"
+                        : x === "discord"
+                          ? "Discord"
+                          : x === "slack"
+                            ? "Slack"
+                            : x === "teams"
+                              ? "Microsoft Teams"
+                              : x === "webhook"
+                                ? "Generic webhook"
+                                : "Anthropic"}
               </option>
             ))}
           </select>
         </label>
       </div>
+      {isNotif ? (
+        <label>
+          Webhook URL
+          <div className="password-wrap">
+            <input
+              type={show ? "text" : "password"}
+              value={v.url || ""}
+              onChange={(e) => change("url", e.target.value)}
+              placeholder={item.has_url ? "Saved URL. Leave blank to keep it." : "https://..."}
+              autoComplete="new-password"
+              required={!item.has_url}
+            />
+            <button type="button" onClick={() => setShow(!show)} aria-label={show ? "Hide webhook URL" : "Show webhook URL"}>
+              {show ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
+          <small>Webhook URLs contain secrets. Diffrook encrypts them at rest and never displays them after saving.</small>
+        </label>
+      ) : (
+      <>
       <label>
         {isConn
           ? v.kind === "github"
@@ -1862,6 +1997,8 @@ function ResourceForm({
           </label>
         </div>
       )}
+      </>
+      )}
       {err && <div className="form-error">{err}</div>}
       <div className="form-actions">
         <button type="button" className="btn secondary" onClick={cancel}>
@@ -1869,7 +2006,7 @@ function ResourceForm({
         </button>
         <button className="btn primary">
           <Check size={15} />
-          Save {isConn ? "connection" : "provider"}
+          Save {isConn ? "connection" : isNotif ? "destination" : "provider"}
         </button>
       </div>
     </form>
@@ -1880,12 +2017,14 @@ function AutomationForm({
   item,
   connections,
   providers,
+  notificationProviders,
   save,
   cancel,
 }: {
   item: Obj;
   connections: Obj[];
   providers: Obj[];
+  notificationProviders: Obj[];
   save: (v: Obj) => void;
   cancel: () => void;
 }) {
@@ -1923,18 +2062,28 @@ function AutomationForm({
         ? [...new Set([...(v.trigger.events || []), event])]
         : v.trigger.events.filter((e: string) => e !== event),
     );
-  const addNotification = () =>
+  const addNotification = () => {
+    const provider = notificationProviders[0];
     upd("notifications", [
       ...v.notifications,
-      { id: crypto.randomUUID(), kind: "discord", url: "" },
+      provider
+        ? { id: crypto.randomUUID(), kind: provider.kind, provider_id: provider.id }
+        : { id: crypto.randomUUID(), kind: "pr_comment", url: "" },
     ]);
-  const updateNotification = (i: number, k: string, val: string) =>
-    upd(
-      "notifications",
-      v.notifications.map((n: Obj, j: number) =>
-        i === j ? { ...n, [k]: val } : n,
-      ),
-    );
+  };
+  const chooseNotification = (i: number, value: string) => {
+    if (value.startsWith("legacy:")) return;
+    const items = [...v.notifications];
+    const current = { ...items[i] };
+    if (value.startsWith("provider:")) {
+      const provider = notificationProviders.find((p) => p.id === value.slice(9));
+      if (!provider) return;
+      items[i] = { ...current, kind: provider.kind, provider_id: provider.id, url: "", has_url: false };
+    } else {
+      items[i] = { ...current, kind: value, provider_id: undefined, url: "", has_url: false };
+    }
+    upd("notifications", items);
+  };
   const removeNotification = (i: number) =>
     upd(
       "notifications",
@@ -2390,7 +2539,7 @@ function AutomationForm({
             </span>
             <div>
               <h3>Notifications</h3>
-              <p>Send a message when a run finishes.</p>
+              <p>Send a message when a run finishes. Manage reusable destinations in Notifications.</p>
             </div>
             <button
               type="button"
@@ -2406,52 +2555,27 @@ function AutomationForm({
               {v.notifications.map((n: Obj, i: number) => (
                 <div className="notification-row" key={n.id || i}>
                   <select
-                    value={n.kind}
-                    onChange={(e) =>
-                      updateNotification(i, "kind", e.target.value)
-                    }
+                    value={n.provider_id ? `provider:${n.provider_id}` : n.has_url && ["discord", "slack", "teams", "webhook"].includes(n.kind) ? `legacy:${i}` : n.kind}
+                    onChange={(e) => chooseNotification(i, e.target.value)}
                   >
-                    {[
-                      "pr_comment",
-                      "issue_comment",
-                      "discord",
-                      "slack",
-                      "teams",
-                      "webhook",
-                    ].map((k) => (
-                      <option key={k} value={k}>
-                        {
-                          (
-                            {
-                              pr_comment: "Pull request comment",
-                              issue_comment: "Issue comment",
-                              discord: "Discord",
-                              slack: "Slack",
-                              teams: "Microsoft Teams",
-                              webhook: "Webhook",
-                            } as Record<string, string>
-                          )[k]
-                        }
-                      </option>
-                    ))}
+                    <option value="pr_comment">Pull request comment</option>
+                    <option value="issue_comment">Issue comment</option>
+                    {n.has_url && ["discord", "slack", "teams", "webhook"].includes(n.kind) && (
+                      <option value={`legacy:${i}`}>Legacy {n.kind} URL</option>
+                    )}
+                    <optgroup label="Saved notification providers">
+                      {notificationProviders.map((p) => (
+                        <option key={p.id} value={`provider:${p.id}`}>{p.name} · {p.kind}</option>
+                      ))}
+                      {!notificationProviders.length && <option disabled value="">Add a destination in Notifications first</option>}
+                    </optgroup>
                   </select>
-                  {["discord", "slack", "teams", "webhook"].includes(
-                    n.kind,
-                  ) && (
-                    <input
-                      type="url"
-                      value={n.url || ""}
-                      onChange={(e) =>
-                        updateNotification(i, "url", e.target.value)
-                      }
-                      placeholder={n.has_url ? "Saved URL (leave blank to keep)" : "https://..."}
-                      required={!n.has_url}
-                    />
-                  )}
                   <span className="notification-hint">
                     {["pr_comment", "issue_comment"].includes(n.kind)
                       ? "Posts through the selected code host"
-                      : "Destination URL"}
+                      : n.provider_id
+                        ? notificationProviders.find((p) => p.id === n.provider_id)?.has_url ? "Saved destination · URL encrypted" : "Select a saved destination"
+                        : n.has_url ? "Legacy per-automation URL · retained on save" : "Select a saved destination"}
                   </span>
                   <button
                     type="button"
