@@ -2,13 +2,17 @@ name: CI
 on:
   push:
   pull_request:
-  release:
-    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing tag and draft release to package and validate
+        required: true
+        type: string
 permissions:
   contents: read
 jobs:
   checks:
-    if: github.event_name != 'release'
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +56,7 @@ jobs:
         run: docker rm -f -v diffrook-smoke || true
 
   release-package:
-    if: github.event_name == 'release' && github.event.action == 'published'
+    if: github.event_name == 'workflow_dispatch'
     strategy:
       matrix:
         include:
@@ -61,12 +65,14 @@ jobs:
           - runner: ubuntu-24.04-arm
             arch: aarch64
     runs-on: ${{ matrix.runner }}
+    env:
+      RELEASE_TAG: ${{ inputs.release_tag || github.event.release.tag_name }}
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ inputs.release_tag || github.event.release.tag_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -74,7 +80,7 @@ jobs:
         working-directory: web
       - run: |
           version=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
-          test "v$version" = "$GITHUB_REF_NAME"
+          test "v$version" = "$RELEASE_TAG"
       - run: docker build --target server -t diffrook-release-builder:latest .
       - run: |
           mkdir -p bundle/web
@@ -82,10 +88,17 @@ jobs:
           docker cp "$cid:/diffrook" bundle/diffrook
           docker rm "$cid"
           cp -R web/dist/. bundle/web/
-          cp LICENSE bundle/LICENSE
-          mkdir -p bundle/licenses
-          cp -R docs/licenses/. bundle/licenses/
-          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web LICENSE licenses
-          gh release upload "$GITHUB_REF_NAME" "diffrook-linux-${{ matrix.arch }}.tar.gz" --repo "$GITHUB_REPOSITORY" --clobber
+          # Keep notices under web/ so pre-0.2 update extractors accept the package.
+          mkdir -p bundle/web/licenses
+          cp LICENSE bundle/web/licenses/LICENSE
+          cp -R docs/licenses/. bundle/web/licenses/
+          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web
+      - name: Test the packaged binary and backup restoration
+        run: bash scripts/release-smoke.sh "diffrook-linux-${{ matrix.arch }}.tar.gz"
+      - name: Upload validated packages
+        run: |
+          archive="diffrook-linux-${{ matrix.arch }}.tar.gz"
+          sha256sum "$archive" > "$archive.sha256"
+          gh release upload "$RELEASE_TAG" "$archive" "$archive.sha256" --repo "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}

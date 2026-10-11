@@ -957,7 +957,7 @@ function Overview({
           <label>Update policy
             <select value={updates.policy || "manual"} onChange={(e) => void updatePolicy(e.target.value)}>
               <option value="manual">Manual updates</option>
-              <option value="automatic">Automatic updates</option>
+              <option value="automatic">Automatic stable updates</option>
             </select>
           </label>
           {release && <button className="btn primary" disabled={updating || !release.supported} onClick={async () => { setUpdating(true); try { await applyUpdate(release.tag); } finally { setUpdating(false); } }}><ArrowDownRight size={15} />{updating ? "Updating…" : "Install update"}</button>}

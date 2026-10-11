@@ -4,7 +4,11 @@ Self-hosted code review and repository automations for GitHub and Forgejo. Choos
 
 Diffrook uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
 
-The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation or automatic in-container updates. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
+The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
+
+This version is the **0.2.0-beta.1 self-hosted preview**. Cloud Hosting remains
+Coming soon and cannot be purchased or activated. See [release and upgrade
+instructions](docs/releases.md) before upgrading an older installation.
 
 ## Run with Docker
 

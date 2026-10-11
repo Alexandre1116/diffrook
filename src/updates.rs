@@ -110,11 +110,22 @@ async fn latest_available(state: &AppState) -> Option<String> {
     let failed = tokio::fs::read_to_string(state.data_dir.join("failed-update.txt"))
         .await
         .ok();
-    state.updates.read().await["releases"]
-        .as_array()?
+    let updates = state.updates.read().await;
+    automatic_release(updates["releases"].as_array()?, failed.as_deref())
+}
+
+fn automatic_release(releases: &[Value], failed: Option<&str>) -> Option<String> {
+    releases
         .iter()
         .find(|r| {
-            r["newer"] == true && r["supported"] == true && failed.as_deref() != r["tag"].as_str()
+            r["newer"] == true
+                && r["supported"] == true
+                && r["prerelease"] == false
+                && r["version"]
+                    .as_str()
+                    .and_then(|v| semver::Version::parse(v).ok())
+                    .is_some_and(|v| v.pre.is_empty())
+                && failed != r["tag"].as_str()
         })
         .and_then(|r| r["tag"].as_str().map(str::to_owned))
 }
@@ -254,15 +265,25 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
             })
             .collect();
         anyhow::ensure!(
-            parts.first().is_some_and(|p| p == "diffrook" || p == "web"),
+            parts
+                .first()
+                .is_some_and(|p| matches!(p.as_ref(), "diffrook" | "web" | "LICENSE" | "licenses")),
             "unexpected file in release archive"
         );
-        if parts[0] == "diffrook" {
-            anyhow::ensure!(parts.len() == 1, "unexpected binary archive path");
-            binary = true;
+        if parts[0] == "diffrook" || parts[0] == "LICENSE" {
+            anyhow::ensure!(parts.len() == 1, "unexpected root archive path");
+            anyhow::ensure!(
+                entry.header().entry_type().is_file(),
+                "root archive entry must be a regular file"
+            );
+            if parts[0] == "diffrook" {
+                binary = true;
+            }
         }
-        if parts.first().is_some_and(|p| p == "web")
-            && parts.get(1).is_some_and(|p| p == "index.html")
+        if parts.len() == 2
+            && parts[0] == "web"
+            && parts[1] == "index.html"
+            && entry.header().entry_type().is_file()
         {
             web_index = true;
         }
@@ -507,6 +528,28 @@ mod tests {
         std::fs::write(&path, "invalid").unwrap();
         assert!(can_stage_update(dir.path()).is_err());
     }
+    #[test]
+    fn automatic_updates_skip_prereleases_missing_metadata_and_failed_versions() {
+        let releases = vec![
+            json!({"tag":"v2.0.0-beta.1","version":"2.0.0-beta.1","newer":true,"supported":true,"prerelease":true}),
+            json!({"tag":"v1.9.0-beta.1","version":"1.9.0-beta.1","newer":true,"supported":true,"prerelease":false}),
+            json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"supported":true}),
+            json!({"tag":"v1.7.0","version":"1.7.0","newer":true,"supported":false,"prerelease":false}),
+            json!({"tag":"v1.6.0","version":"1.6.0","newer":true,"supported":true,"prerelease":false}),
+            json!({"tag":"v1.5.0","version":"1.5.0","newer":true,"supported":true,"prerelease":false}),
+        ];
+        assert_eq!(
+            automatic_release(&releases, None).as_deref(),
+            Some("v1.6.0")
+        );
+        assert_eq!(
+            automatic_release(&releases, Some("v1.6.0")).as_deref(),
+            Some("v1.5.0")
+        );
+        assert!(automatic_release(&releases[..4], None).is_none());
+        assert!(automatic_release(&[], None).is_none());
+    }
+
     use std::io::Write;
     #[test]
     fn extracts_only_bounded_regular_files_from_release_package() {
@@ -519,6 +562,9 @@ mod tests {
             ("diffrook", b"binary".as_slice()),
             ("web/index.html", b"index".as_slice()),
             ("web/assets/app.js", b"app".as_slice()),
+            ("LICENSE", b"current license".as_slice()),
+            ("licenses/previous.txt", b"prior license".as_slice()),
+            ("web/licenses/LICENSE", b"compatible notice".as_slice()),
         ] {
             let mut header = tar::Header::new_gnu();
             header.set_size(bytes.len() as u64);
@@ -535,7 +581,47 @@ mod tests {
             std::fs::read(extracted.join("web/assets/app.js")).unwrap(),
             b"app"
         );
+        assert_eq!(
+            std::fs::read(extracted.join("LICENSE")).unwrap(),
+            b"current license"
+        );
+        assert_eq!(
+            std::fs::read(extracted.join("licenses/previous.txt")).unwrap(),
+            b"prior license"
+        );
+        assert_eq!(
+            std::fs::read(extracted.join("web/licenses/LICENSE")).unwrap(),
+            b"compatible notice"
+        );
         assert!(extract_release(dir.path(), "bad", b"not gzip").is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_paths_links_and_directories_in_place_of_required_files() {
+        for (path, kind) in [
+            ("secrets/key.pem", tar::EntryType::Regular),
+            ("LICENSE/extra", tar::EntryType::Regular),
+            ("licenses/link", tar::EntryType::Symlink),
+            ("diffrook", tar::EntryType::Directory),
+            ("web/index.html", tar::EntryType::Directory),
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            let mut builder = tar::Builder::new(encoder);
+            let mut header = tar::Header::new_gnu();
+            header.set_entry_type(kind);
+            header.set_size(0);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder
+                .append_data(&mut header, path, std::io::empty())
+                .unwrap();
+            let archive = builder.into_inner().unwrap().finish().unwrap();
+            assert!(
+                extract_release(dir.path(), "v1.2.5", &archive).is_err(),
+                "{path}"
+            );
+        }
     }
 
     #[test]
