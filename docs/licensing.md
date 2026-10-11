@@ -68,14 +68,26 @@ tokens cost EUR 9; Freelancer Cloud then totals EUR 28 that month before tax.
    expose this non-secret ID before login.
 2. In **Plans and pricing**, select monthly or annual billing and, for Enterprise,
    at least ten seats and any extra automation packs. Download **Prepare license
-   request** and give it to the Diffrook owner to arrange an agreement and payment.
-   The JSON is a request and quote, not a license or receipt. On an SSO-only
-   instance, arrange the license directly with the owner using the Installation ID.
-3. Obtain a signed license, mount it read-only and set `DIFFROOK_LICENSE_FILE`
+   request**. Visit [diffrook.dev/buy](https://diffrook.dev/buy/), import the request
+   or enter the Installation ID and select the plan. Enter the licence holder name.
+   The JSON is a request and quote, not a license or receipt. Purchases remain
+   disabled while payment configuration is incomplete. On an SSO-only instance,
+   use the Installation ID displayed before login.
+3. Save the private licence link before continuing to Stripe Checkout. After
+   confirmed payment, this link provides the signed file and a billing portal.
+   Keep it private: anyone with it can download the licence and manage billing.
+4. Download the signed license, mount it read-only and set `DIFFROOK_LICENSE_FILE`
    to its container path. Restart and check Settings.
 
-There is no payment processor or automatic renewal configured. Payment,
-invoices and renewals are arranged directly with the owner. Legacy signed
+When online checkout is enabled, Stripe charges the monthly or annual subscription
+until cancelled. Confirmed renewal payments produce a new signed file at the same
+private link. Download each renewal, replace the mounted file and restart Diffrook
+before the previous file expires. The self-hosted application does not connect to
+Stripe or fetch renewals. Delivery is through the private download page, not email.
+The billing portal allows payment method updates, invoice downloads and cancellation
+at the end of the paid period. Plan changes and installation transfers require the
+owner. Lost private links require payment verification by the owner before recovery.
+Manual agreements and owner-issued files remain available. Legacy signed
 Business v1 files retain their original allowances and expiry, including
 previously issued perpetual files. New v2 subscriptions require a billing
 period, expiry and exact plan allowances.
@@ -142,6 +154,27 @@ The existing issuer key is preserved:
 Only initial setup with both files absent may use `node scripts/license.mjs init`.
 It refuses to overwrite files. Key loss or rotation requires deliberate migration
 of official builds and licenses.
+
+For a request downloaded from Settings, first calculate the current quote without
+reading the signing key:
+
+```sh
+node scripts/license.mjs quote --request customer-request.json
+```
+
+The result always reports `payment_verified: false`. The tool checks allowances
+against the catalog and warns about outdated quoted prices. After independently
+confirming payment and its expiry, issue a manual file:
+
+```sh
+node scripts/license.mjs issue --request customer-request.json --customer "Company name" --expires 2027-01-01T00:00:00Z --out ./secrets/customer-license.json
+```
+
+The website's automatic issuer is configured separately in the private
+`diffrook-site` repository. It verifies Stripe webhook signatures, fetches canonical
+paid invoices and subscriptions, calculates prices from this catalog and signs the
+paid invoice period with the existing key. Test mode must use a separate issuer key
+and database; test files must never be accepted by official production builds.
 
 Annual Freelancer:
 

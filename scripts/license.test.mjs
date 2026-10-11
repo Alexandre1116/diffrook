@@ -67,6 +67,25 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
     ['--plan', 'enterprise', '--users', '2147483647'], ['--plan', 'teams', '--expires', '2000-01-01'],
   ]) assert.notEqual(run(...base, ...options, '--out', join(directory, 'invalid.json')).status, 0, options.join(' '));
   assert.notEqual(run('issue', '--plan', 'freelancer', '--installation', id, '--customer', 'Test', '--out', join(directory, 'no-period.json')).status, 0);
+  const requestPath=join(directory,'request.json');
+  const request={request_version:1,hosting:'self_hosted',installation_id:id,plan:'teams',billing_period:'monthly',users:5,extra_automation_packs:0,automations:20,currency:'EUR',tax_included:false,quoted_amount:1};
+  await writeFile(requestPath,JSON.stringify(request));
+  const quoted=run('quote','--request',requestPath);
+  assert.equal(quoted.status,0,quoted.stderr);
+  assert.equal(JSON.parse(quoted.stdout).amount,29);
+  assert.equal(JSON.parse(quoted.stdout).payment_verified,false);
+  assert.match(quoted.stderr,/differs from the current catalog/);
+  const requestedOutput=join(directory,'requested.json');
+  const requested=run('issue','--request',requestPath,'--customer','Request customer','--out',requestedOutput);
+  assert.equal(requested.status,0,requested.stderr);
+  const requestedClaims=JSON.parse(Buffer.from(JSON.parse(await readFile(requestedOutput,'utf8')).payload,'base64url'));
+  assert.equal(requestedClaims.max_users,5);assert.equal(requestedClaims.max_automations,20);
+  assert.equal(requestedClaims.customer,'Request customer');
+  assert.notEqual(run('issue','--request',requestPath,'--plan','teams','--customer','Test','--out',join(directory,'override.json')).status,0);
+  for(const change of [{users:6},{automations:999},{extra_automation_packs:1},{hosting:'cloud'},{unknown:true}]){
+    await writeFile(requestPath,JSON.stringify({...request,...change}));
+    assert.notEqual(run('quote','--request',requestPath).status,0);
+  }
   await writeFile(join(directory, 'src/license-public-key.hex'), '00'.repeat(32));
   assert.notEqual(run(...base, '--plan', 'freelancer', '--out', join(directory, 'wrong-key.json')).status, 0);
 });
