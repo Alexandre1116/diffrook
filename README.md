@@ -95,8 +95,12 @@ Copyright 2026 Alexandre Ramos and Diffrook contributors.
 Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
 The free Individual plan permits personal, noncommercial self-hosted use with
 **one user and three saved automations**, including disabled automations. Company,
-team, employment, freelance and other professional use requires a paid plan,
-even with one user. Paid self-hosted plans use offline signed, expiring licenses:
+team, employment, freelance and other professional use requires a paid plan
+in stable releases. **During beta, Freelancer and Teams are free**, with their
+normal limits and commercial self-hosted use. Enterprise is excluded. Choose
+your free plan in Settings, without payment or a signed file. The beta offer
+does not grant a stable paid license or create automatic billing.
+The following prices are for the official release:
 
 | Self-hosted plan | Users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
@@ -108,8 +112,8 @@ even with one user. Paid self-hosted plans use offline signed, expiring licenses
 Prices exclude applicable tax. Enterprise packs add ten automations for EUR 5/month
 or EUR 50/year. All self-hosted plans bring their own AI and infrastructure;
 there is no execution-based license charge. Previously issued Business licenses
-remain supported. Settings shows the catalog and prepares a license request for
-the project owner; payment and renewal are arranged directly.
+remain supported. New paid sales are disabled until legal and fiscal setup is
+complete. During beta, Settings activates Individual, Freelancer or Teams for free.
 
 **Cloud Hosting: Coming soon.** The catalog previews paid hosted subscriptions,
 BYOK or managed AI billed monthly by token consumption. Cloud purchase, activation

@@ -3,11 +3,30 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
+use std::sync::{
+    atomic::{AtomicU8, Ordering},
+    Arc,
+};
+
+fn is_beta_version(version: &str) -> bool {
+    semver::Version::parse(version).is_ok_and(|v| v.pre.as_str().split('.').next() == Some("beta"))
+}
+
+fn beta_offer_for_version(version: &str) -> bool {
+    let policy: serde_json::Value =
+        serde_json::from_str(include_str!("plans.json")).expect("embedded plan catalog");
+    policy["beta"]["enabled"] == true && is_beta_version(version)
+}
 
 pub fn catalog() -> &'static serde_json::Value {
     static CATALOG: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
     CATALOG.get_or_init(|| {
-        serde_json::from_str(include_str!("plans.json")).expect("embedded plan catalog")
+        let mut value: serde_json::Value =
+            serde_json::from_str(include_str!("plans.json")).expect("embedded plan catalog");
+        value["beta"]["enabled"] = serde_json::json!(
+            value["beta"]["enabled"] == true && is_beta_version(env!("CARGO_PKG_VERSION"))
+        );
+        value
     })
 }
 
@@ -67,7 +86,7 @@ impl std::error::Error for UserLimitReached {}
 pub(crate) struct SsoPlanRequired;
 impl std::fmt::Display for SsoPlanRequired {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SSO requires an active Teams or Enterprise license")
+        f.write_str("SSO requires a Teams or Enterprise entitlement")
     }
 }
 impl std::error::Error for SsoPlanRequired {}
@@ -108,10 +127,17 @@ struct Claims {
 pub struct License {
     pub installation_id: uuid::Uuid,
     claims: Option<Claims>,
+    beta_available: bool,
+    beta_plan: Arc<AtomicU8>,
+    beta_selection_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl License {
     pub async fn load(db: &SqlitePool) -> anyhow::Result<Self> {
+        Self::load_for_version(db, env!("CARGO_PKG_VERSION")).await
+    }
+
+    async fn load_for_version(db: &SqlitePool, version: &str) -> anyhow::Result<Self> {
         sqlx::query("INSERT OR IGNORE INTO app_settings(key,value) VALUES('installation.id',?)")
             .bind(uuid::Uuid::new_v4().to_string())
             .execute(db)
@@ -120,10 +146,19 @@ impl License {
             sqlx::query_scalar("SELECT value FROM app_settings WHERE key='installation.id'")
                 .fetch_one(db)
                 .await?;
-        let mut license = Self {
-            installation_id: id.parse()?,
-            claims: None,
-        };
+        let mut license = Self::unlicensed(id.parse()?, beta_offer_for_version(version));
+        if license.beta_available {
+            let saved: Option<String> =
+                sqlx::query_scalar("SELECT value FROM app_settings WHERE key='beta.plan'")
+                    .fetch_optional(db)
+                    .await?;
+            let selected = saved
+                .or_else(|| std::env::var("DIFFROOK_BETA_PLAN").ok())
+                .unwrap_or_else(|| "individual".into());
+            license
+                .beta_plan
+                .store(Self::beta_plan_code(&selected)?, Ordering::SeqCst);
+        }
         if let Some(path) = std::env::var("DIFFROOK_LICENSE_FILE")
             .ok()
             .filter(|s| !s.trim().is_empty())
@@ -143,6 +178,60 @@ impl License {
         Ok(license)
     }
 
+    fn unlicensed(installation_id: uuid::Uuid, beta_available: bool) -> Self {
+        Self {
+            installation_id,
+            claims: None,
+            beta_available,
+            beta_plan: Arc::new(AtomicU8::new(0)),
+            beta_selection_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    fn beta_plan_code(edition: &str) -> anyhow::Result<u8> {
+        match edition {
+            "individual" => Ok(0),
+            "freelancer" => Ok(1),
+            "teams" => Ok(2),
+            _ => anyhow::bail!(
+                "Only Individual, Freelancer and Teams are available free during beta"
+            ),
+        }
+    }
+
+    fn beta_edition(&self) -> Option<&'static str> {
+        self.beta_available
+            .then(|| match self.beta_plan.load(Ordering::SeqCst) {
+                1 => "freelancer",
+                2 => "teams",
+                _ => "individual",
+            })
+    }
+
+    fn edition(&self) -> &str {
+        self.active().map_or_else(
+            || self.beta_edition().unwrap_or("individual"),
+            |c| c.edition.as_str(),
+        )
+    }
+
+    pub async fn select_beta_plan(&self, db: &SqlitePool, edition: &str) -> anyhow::Result<()> {
+        ensure!(self.beta_available, "Free beta plans are unavailable in this version; stable professional use requires a paid license");
+        ensure!(
+            self.active().is_none(),
+            "An active signed license already controls this installation's plan"
+        );
+        let selected = Self::beta_plan_code(edition)?;
+        let _selection = self.beta_selection_lock.lock().await;
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('beta.plan',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(edition).execute(db).await?;
+        self.beta_plan.store(selected, Ordering::SeqCst);
+        Ok(())
+    }
+
+    pub fn can_select_beta_plan(&self) -> bool {
+        self.beta_available && self.active().is_none()
+    }
+
     fn active(&self) -> Option<&Claims> {
         self.claims.as_ref().filter(|c| {
             c.expires_at
@@ -156,17 +245,19 @@ impl License {
                 users: c.max_users,
                 automations: c.max_automations,
             },
-            None => Limits {
-                users: Some(INDIVIDUAL_USERS),
-                automations: Some(INDIVIDUAL_AUTOMATIONS),
-            },
+            None => {
+                let definition = plan(self.edition()).expect("default or beta plan");
+                Limits {
+                    users: Some(definition["users"].as_u64().unwrap() as u32),
+                    automations: Some(definition["automations"].as_u64().unwrap() as u32),
+                }
+            }
         }
     }
 
     pub fn allows_sso(&self) -> bool {
-        self.active().is_some_and(|claims| {
-            claims.version == 1 || plan(&claims.edition).is_some_and(|p| p["sso"] == true)
-        })
+        self.active().is_some_and(|c| c.version == 1)
+            || plan(self.edition()).is_some_and(|p| p["sso"] == true)
     }
 
     pub async fn can_start_sso(&self, db: &SqlitePool) -> anyhow::Result<bool> {
@@ -193,14 +284,18 @@ impl License {
         let limits = self.limits();
         let active = self.active();
         Ok(serde_json::json!({
-            "edition": active.map_or("individual", |c| c.edition.as_str()),
-            "plan_name": active.map_or("Individual", |c| plan(&c.edition).and_then(|p| p["name"].as_str()).unwrap_or("Business (legacy)")),
+            "edition": self.edition(),
+            "plan_name": plan(self.edition()).and_then(|p| p["name"].as_str()).unwrap_or("Business (legacy)"),
+            "beta_offer_available": self.beta_available,
+            "can_select_beta_plan": self.can_select_beta_plan(),
+            "beta_free": self.beta_available && active.is_none(),
+            "commercial_use": active.is_some() || self.beta_available && self.edition() != "individual",
             "licensed_edition": self.claims.as_ref().map(|c| &c.edition),
             "billing_period": self.claims.as_ref().and_then(|c| c.billing_period.as_deref()),
             "extra_automation_packs": self.claims.as_ref().and_then(|c| c.extra_automation_packs),
             "features": {"sso":self.allows_sso(),"bring_your_own_ai":true},
             "installation_id": self.installation_id,
-            "license_status": if self.claims.is_none() { "not_installed" } else if active.is_some() { "active" } else { "expired" },
+            "license_status": if active.is_some() { "active" } else if self.beta_available { "beta_free" } else if self.claims.is_none() { "not_installed" } else { "expired" },
             "customer": self.claims.as_ref().map(|c| &c.customer),
             "expires_at": self.claims.as_ref().and_then(|c| c.expires_at),
             "limits": limits, "usage": {"users":users,"automations":automations},
@@ -232,10 +327,7 @@ impl License {
 
     #[cfg(test)]
     pub(crate) fn individual_for_tests(installation_id: uuid::Uuid) -> Self {
-        Self {
-            installation_id,
-            claims: None,
-        }
+        Self::unlicensed(installation_id, false)
     }
 
     #[cfg(test)]
@@ -256,6 +348,7 @@ impl License {
                 billing_period: None,
                 extra_automation_packs: None,
             }),
+            ..Self::unlicensed(installation_id, false)
         }
     }
 }
@@ -337,6 +430,55 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
 
+    #[tokio::test]
+    async fn beta_plans_are_persisted_bounded_and_ignored_by_stable_releases() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::db::open(dir.path().join("beta.sqlite").to_str().unwrap())
+            .await
+            .unwrap();
+        let beta = License::load_for_version(&db, "0.2.0-beta.2")
+            .await
+            .unwrap();
+        for (edition, users, automations, sso) in [
+            ("individual", 1, 3, false),
+            ("freelancer", 1, 10, false),
+            ("teams", 5, 20, true),
+        ] {
+            beta.select_beta_plan(&db, edition).await.unwrap();
+            let status = beta.status(&db).await.unwrap();
+            assert_eq!(status["edition"], edition);
+            assert_eq!(
+                status["limits"],
+                serde_json::json!({"users":users,"automations":automations})
+            );
+            assert_eq!(status["features"]["sso"], sso);
+            assert_eq!(status["commercial_use"], edition != "individual");
+            assert_eq!(status["license_status"], "beta_free");
+        }
+        for excluded in ["enterprise", "cloud", "business", "unknown"] {
+            assert!(beta.select_beta_plan(&db, excluded).await.is_err());
+        }
+        let reload = License::load_for_version(&db, "0.2.0-beta.3")
+            .await
+            .unwrap();
+        assert_eq!(reload.edition(), "teams");
+        assert_eq!(reload.installation_id, beta.installation_id);
+        for version in ["0.2.0", "0.3.0-rc.1", "0.3.0+beta", "invalid"] {
+            let stable = License::load_for_version(&db, version).await.unwrap();
+            assert_eq!(stable.edition(), "individual");
+            assert_eq!(stable.limits().automations, Some(3));
+            assert!(!stable.allows_sso());
+            assert!(stable.select_beta_plan(&db, "teams").await.is_err());
+            assert_eq!(stable.status(&db).await.unwrap()["beta_free"], false);
+        }
+        let mut licensed =
+            License::subscription_for_tests(beta.installation_id, "enterprise", 10, 0);
+        licensed.beta_available = true;
+        assert!(licensed.select_beta_plan(&db, "teams").await.is_err());
+        assert_eq!(licensed.limits().users, Some(10));
+        assert_eq!(licensed.status(&db).await.unwrap()["beta_free"], false);
+    }
+
     fn envelope(claims: &serde_json::Value, key: &SigningKey) -> Vec<u8> {
         let payload = serde_json::to_vec(claims).unwrap();
         let message = [b"diffrook-license-v1\0".as_slice(), payload.as_slice()].concat();
@@ -362,6 +504,7 @@ mod tests {
             let license = License {
                 installation_id: id,
                 claims: Some(verified),
+                ..License::unlicensed(id, false)
             };
             assert_eq!(license.limits().users, Some(users));
             assert_eq!(license.limits().automations, Some(automations));
@@ -403,6 +546,7 @@ mod tests {
             let license = License {
                 installation_id: id,
                 claims: Some(verify(&envelope(&expired, &key), &key.verifying_key(), id).unwrap()),
+                ..License::unlicensed(id, false)
             };
             assert_eq!(license.limits().automations, Some(3));
             assert!(!license.allows_sso());
@@ -428,6 +572,7 @@ mod tests {
         let license = License {
             installation_id: id,
             claims: Some(verified),
+            ..License::unlicensed(id, false)
         };
         assert_eq!(license.limits().users, Some(5));
         assert_eq!(license.limits().automations, Some(10));

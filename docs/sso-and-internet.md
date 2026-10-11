@@ -54,7 +54,8 @@ Assign the IdP application to the appropriate administrators and require MFA in
 the IdP's policy.
 
 SSO defaults to disabling local authentication, including initial password setup.
-New SSO identities require an active Freelancer, Teams or Enterprise license and
+New SSO identities require the free Teams beta entitlement or an active signed
+Teams or Enterprise license and
 consume its user allowance, including any existing local administrator. Individual
 uses local sign-in. Previously provisioned SSO identities retain verified sign-in
 access after expiry or upgrade; legacy signed Business licenses remain supported.

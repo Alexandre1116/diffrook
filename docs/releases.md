@@ -1,19 +1,24 @@
 # Self-hosted beta releases
 
-## 0.2.0-beta.1
+## 0.2.0-beta.2
 
 This is a self-hosted beta for pilot installations. Cloud Hosting is Coming soon:
 there is no hosted deployment, Cloud activation, checkout or token billing.
-Customers provide the server and AI endpoint. Professional and organizational
-use requires a paid signed license; payment and renewal are arranged manually.
+Customers provide the server and AI endpoint. Individual, Freelancer and Teams
+are free during the beta program; Enterprise is excluded and unavailable.
 
 - Individual: personal noncommercial use, 1 user and 3 automations, free forever.
-- Freelancer: 1 user and 10 automations, local sign-in, EUR 9/month or EUR 90/year.
-- Teams: 5 users and 20 automations, OIDC SSO, EUR 29/month or EUR 290/year.
-- Enterprise: at least 10 users, 10 automations per user pooled, OIDC SSO,
-  EUR 8/user/month or EUR 80/user/year, with optional automation packs.
+- Freelancer: professional and commercial use, 1 user and 10 automations, no SSO, free during beta.
+- Teams: organizational and commercial use, 5 users and 20 automations, OIDC SSO, free during beta.
+- Enterprise: excluded from free beta; new paid sales remain disabled.
 
-Prices exclude applicable tax. See [licensing](licensing.md) for exact terms.
+Select the free plan in Settings. SSO-only installations can bootstrap with
+`DIFFROOK_BETA_PLAN=teams`. No payment, card or signed beta file is required.
+The first official stable release ends the beta program. Stable builds require
+paid signed licenses for Freelancer and Teams and ignore stored beta selections.
+Individual remains free forever. No automatic subscription or charge is created.
+Review [licensing](licensing.md) before upgrading to the official release.
+
 All registered users are administrators. Do not assign SSO access to users who
 should have restricted permissions. Existing identities can still sign in after
 expiry or downgrade; new SSO identities require Teams or Enterprise. Legacy
@@ -24,7 +29,7 @@ Business licenses retain their original allowances and expiry.
 Install Git and Docker with Compose on the customer's server, then:
 
 ```sh
-git clone --branch v0.2.0-beta.1 --depth 1 https://github.com/Alexandre1116/diffrook.git
+git clone --branch v0.2.0-beta.2 --depth 1 https://github.com/Alexandre1116/diffrook.git
 cd diffrook
 docker compose up --build -d
 docker compose logs diffrook
@@ -45,12 +50,13 @@ Do not expose the default HTTP listener directly to the Internet.
    Confirm that the backup can be restored to an isolated empty volume.
 3. Review the new license and quotas. Existing over-quota data is retained, but
    creating more users or automations is blocked. Obtain a paid license before
-   continuing professional or company use of this version.
+   continuing professional or company use of a stable release. During this beta,
+   select the free Freelancer or Teams entitlement in Settings after upgrading.
 4. Check out this tag and rebuild the container. With a clean source checkout:
 
 ```sh
 git fetch --tags
-git checkout v0.2.0-beta.1
+git checkout v0.2.0-beta.2
 docker compose up --build -d
 ```
 

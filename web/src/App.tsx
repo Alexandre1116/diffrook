@@ -631,7 +631,7 @@ function App() {
             />
           )}
           {page === "settings" && (
-            <SettingsPage data={data} notice={setNotice} />
+            <SettingsPage data={data} notice={setNotice} reload={reload} />
           )}
         </div>
       </main>
@@ -1668,9 +1668,11 @@ function RunsPage({
 function SettingsPage({
   data,
   notice,
+  reload,
 }: {
   data: any;
   notice: (s: string) => void;
+  reload: () => Promise<void>;
 }) {
   const exportConfig = () => {
     const sanitized = {
@@ -1704,17 +1706,17 @@ function SettingsPage({
           <div className="setting-icon"><KeyRound size={19} /></div>
           <div>
             <h3>{data.license.plan_name} plan</h3>
-            <p>{data.license.edition !== "individual" ? "Paid self-hosted license. Bring your own AI; allowances follow your commercial agreement." : "Free forever for personal, noncommercial use. Professional work requires Freelancer, Teams or Enterprise."}</p>
+            <p>{data.license.beta_free ? "Free beta plan. Freelancer and Teams permit commercial use during beta. Stable releases require a paid license for professional use. No automatic billing." : data.license.edition !== "individual" ? "Paid self-hosted license. Bring your own AI; allowances follow your commercial agreement." : "Free forever for personal, noncommercial use. Professional work requires Freelancer, Teams or Enterprise."}</p>
             <div className="settings-line"><span>Users</span><b>{data.license.usage.users} / {data.license.limits.users ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>Saved automations</span><b>{data.license.usage.automations} / {data.license.limits.automations ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>License status</span><b>{data.license.license_status.replaceAll("_", " ")}</b></div>
-            <div className="settings-line"><span>SSO entitlement</span><b>{data.license.features.sso ? "Included" : "Paid plans"}</b></div>
+            <div className="settings-line"><span>SSO entitlement</span><b>{data.license.features.sso ? "Included" : "Teams or Enterprise"}</b></div>
             {data.license.billing_period && <div className="settings-line"><span>Billing period</span><b>{data.license.billing_period}</b></div>}
             {data.license.customer && <div className="settings-line"><span>Licensed to</span><b>{data.license.customer}</b></div>}
             {data.license.expires_at && <div className="settings-line"><span>Expires</span><b>{date(new Date(data.license.expires_at * 1000).toISOString())}</b></div>}
             <div className="settings-line"><span>Installation ID</span><code>{data.license.installation_id}</code></div>
             {data.license.over_limit && <p role="alert">Existing data exceeds this plan's limits. It is retained for editing, deletion and export. Additional creations are blocked at the applicable limit.</p>}
-            <p>Disabled automations count. To activate a paid plan, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart.</p>
+            <p>{data.license.can_select_beta_plan ? "Disabled automations count. Select your free beta plan below; no signed file or payment is needed. Individual remains personal and noncommercial." : "Disabled automations count. To activate a paid plan, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart."}</p>
             <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
           </div>
         </section>}
@@ -1783,7 +1785,7 @@ function SettingsPage({
           </div>
         </section>
       </div>
-      {data.catalog && data.license && <Plans catalog={data.catalog} edition={data.license.edition} installationId={data.license.installation_id} notice={notice} />}
+      {data.catalog && data.license && <Plans catalog={data.catalog} edition={data.license.edition} installationId={data.license.installation_id} notice={notice} selectBetaPlan={data.license.can_select_beta_plan ? async edition => { await api("/license/beta-plan", "POST", { edition }); await reload(); } : undefined} />}
     </>
   );
 }

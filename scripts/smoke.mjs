@@ -187,6 +187,20 @@ try {
     await api(`/api/automations/${first.id}`, 'DELETE');
     await api(`/api/automations/${second.id}`, 'DELETE');
   });
+  await check('Free beta plans activate without payment and exclude Enterprise', async () => {
+    if ((await api('/api/plans')).beta.enabled !== true) {
+      await api('/api/license/beta-plan', 'POST', { edition: 'teams' }, { status: 403 });
+      return;
+    }
+    await api('/api/license/beta-plan', 'POST', { edition: 'enterprise' }, { status: 403 });
+    for (const [edition, users, automations, sso] of [['freelancer', 1, 10, false], ['teams', 5, 20, true]]) {
+      const status = await api('/api/license/beta-plan', 'POST', { edition });
+      assert.equal(status.edition, edition); assert.equal(status.license_status, 'beta_free');
+      assert.deepEqual(status.limits, { users, automations }); assert.equal(status.features.sso, sso);
+      assert.equal(status.commercial_use, true);
+    }
+    await api('/api/license/beta-plan', 'POST', { edition: 'individual' });
+  });
   await check('Forgejo review uses the Forgejo diff endpoint', async () => {
     const a = await api('/api/automations', 'POST', automation(forgejo.id, provider.id, { name: 'Forgejo review' }));
     const queued = await api(`/api/automations/${a.id}/run`, 'POST', { kind: 'pull_request', repository: 'acme/demo', number: 7 });

@@ -2,6 +2,7 @@
   "currency": "EUR",
   "tax_included": false,
   "annual_months_charged": 10,
+  "beta": {"enabled":true,"free_self_hosted_plans":["individual","freelancer","teams"],"commercial_use_plans":["freelancer","teams"],"stable_requires_paid_license":true},
   "self_hosted": [
     {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":0,"annual_eur":0,"per_user":false,"free_forever":true},
     {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":false,"commercial_use":true,"monthly_eur":9,"annual_eur":90,"per_user":false},

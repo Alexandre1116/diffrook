@@ -1,4 +1,4 @@
-Diffrook Personal and Business License 1.2
+Diffrook Personal and Business License 1.3
 
 Copyright 2026 Alexandre Ramos and Diffrook contributors.
 
@@ -12,8 +12,8 @@ is retained in docs/licenses/CC-BY-NC-4.0.txt. Third-party dependencies and othe
 separately licensed material retain their respective licenses. This license
 grants only rights held by the applicable Diffrook copyright holders.
 Rights previously granted under Diffrook Personal and Business License 1.0 or
-1.1 and existing customer agreements remain effective for their covered material. The
-previous texts are retained in docs/licenses/.
+1.1 or 1.2 and existing customer agreements remain effective for their covered
+material. The previous texts are retained in docs/licenses/.
 
 Diffrook is source-available software. This license is not an OSI-approved
 open-source license. Viewing the source does not grant unrestricted commercial
@@ -38,16 +38,18 @@ The Individual plan does not permit use for a company, organization or team,
 or use in employment, freelance work, consulting, client work or other
 professional or commercial activities, even when only one person uses
 Diffrook or no fee is charged for a particular task. Those uses require a
-Business license. The user's own hosting, infrastructure and AI-provider costs
-remain the user's responsibility.
+Business license, except for the limited free beta authorization below. The
+user's own hosting, infrastructure and AI-provider costs remain the user's
+responsibility.
 
 3. Business plan: paid self-hosted use
 
 Companies, organizations, teams and individuals performing professional or
 commercial work must obtain a separate paid Business license from Alexandre
 Ramos or an authorized Diffrook licensor before operating Diffrook for those
-purposes. A Business license authorizes self-hosted use only within the
-customer, installation, user, automation and term limits specified in the
+purposes, except where the free beta authorization below applies. A Business
+license authorizes self-hosted use only within the customer, installation,
+user, automation and term limits specified in the
 applicable written commercial agreement. Fees, duration, renewal, support and
 any service commitments are determined by that agreement; no particular price,
 perpetual entitlement, support level or unlimited allowance is promised here.
@@ -84,6 +86,31 @@ customer's contractual entitlement to operate Diffrook for business use.
 Previously provisioned SSO identities may retain verified sign-in access for
 data recovery; this does not include provisioning new SSO identities or extend
 a subscription's contractual term.
+
+3a. Limited free self-hosted beta authorization
+
+Official Diffrook beta builds designated for this offer allow Individual,
+Freelancer and Teams to be used without paying a license fee during the beta
+program. Individual remains limited to personal, noncommercial use with one
+user and three saved automations. Freelancer permits professional and commercial
+self-hosted use by one user with ten saved automations and without SSO. Teams
+permits self-hosted use within one organization by up to five registered users
+with twenty saved automations and OIDC SSO. Disabled automations count.
+
+Enterprise, extra automation packs and Cloud Hosting are excluded. The offer
+requires no payment card, signed paid license or recurring subscription, and
+creates no automatic charge. Customers provide and pay for their own server
+and AI. The restrictions on hosting for third parties, redistribution,
+modifications, warranties and other terms of this license continue to apply.
+
+This authorization applies only to designated official beta builds and ends
+with the beta program when the first official stable release is published. It
+does not grant a perpetual Freelancer or Teams license, access to stable
+releases for professional use, Enterprise rights or any service commitment.
+Official stable releases require a separately purchased signed license for
+Freelancer, Teams or Enterprise. Individual remains free forever for permitted
+personal, noncommercial use. Upgrading does not create a subscription or charge
+without a separate purchase. Existing customer agreements remain effective.
 
 4. Hosted subscriptions and third-party hosting
 

@@ -38,6 +38,10 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/oidc/callback", get(crate::sso::callback))
         .route("/api/dashboard", get(dashboard))
         .route("/api/license", get(license_status))
+        .route(
+            "/api/license/beta-plan",
+            post(select_beta_plan).layer(DefaultBodyLimit::max(16 * 1024)),
+        )
         .route("/api/updates", get(crate::updates::api))
         .route(
             "/api/updates/policy",
@@ -133,6 +137,43 @@ async fn status(State(s): State<AppState>, h: HeaderMap) -> Response {
 async fn license_status(State(s): State<AppState>, h: HeaderMap) -> Response {
     if let Err(r) = guard(&s, &h, false).await {
         return r;
+    }
+    match s.license.status(&s.db).await {
+        Ok(status) => Json(status).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BetaPlanSelection {
+    edition: String,
+}
+
+async fn select_beta_plan(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(selection): Json<BetaPlanSelection>,
+) -> Response {
+    if let Err(r) = guard(&s, &h, true).await {
+        return r;
+    }
+    if !s.license.can_select_beta_plan()
+        || !matches!(
+            selection.edition.as_str(),
+            "individual" | "freelancer" | "teams"
+        )
+    {
+        return error(StatusCode::FORBIDDEN, "Free beta plans require a beta build without an active signed license and are limited to Individual, Freelancer and Teams");
+    }
+    if s.license
+        .select_beta_plan(&s.db, &selection.edition)
+        .await
+        .is_err()
+    {
+        return error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Unable to save the beta plan",
+        );
     }
     match s.license.status(&s.db).await {
         Ok(status) => Json(status).into_response(),

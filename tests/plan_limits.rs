@@ -149,6 +149,117 @@ async fn individual_api_counts_disabled_automations_and_allows_edit_delete_and_r
 }
 
 #[tokio::test]
+async fn beta_plan_selection_requires_authentication_and_enforces_real_allowances() {
+    let (dir, state, app, cookie, input) = fixture().await;
+    if diffrook::licensing::catalog()["beta"]["enabled"] != true {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/license/beta-plan",
+                Some(json!({"edition":"teams"})),
+                Some(&cookie)
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+        return;
+    }
+    assert_eq!(
+        call(
+            &app,
+            "POST",
+            "/api/license/beta-plan",
+            Some(json!({"edition":"teams"})),
+            None
+        )
+        .await
+        .0,
+        StatusCode::UNAUTHORIZED
+    );
+    for excluded in ["enterprise", "cloud", "business"] {
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/license/beta-plan",
+                Some(json!({"edition":excluded})),
+                Some(&cookie)
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    for (edition, max, sso) in [("freelancer", 10, false), ("teams", 20, true)] {
+        let (code, status) = call(
+            &app,
+            "POST",
+            "/api/license/beta-plan",
+            Some(json!({"edition":edition})),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(code, StatusCode::OK);
+        assert_eq!(status["features"]["sso"], sso);
+        assert_eq!(status["beta_free"], true);
+        for _ in 0..max {
+            if state.license.status(&state.db).await.unwrap()["usage"]["automations"]
+                .as_i64()
+                .unwrap()
+                == max
+            {
+                break;
+            }
+            assert_eq!(
+                call(
+                    &app,
+                    "POST",
+                    "/api/automations",
+                    Some(input.clone()),
+                    Some(&cookie)
+                )
+                .await
+                .0,
+                StatusCode::OK
+            );
+        }
+        assert_eq!(
+            call(
+                &app,
+                "POST",
+                "/api/automations",
+                Some(input.clone()),
+                Some(&cookie)
+            )
+            .await
+            .0,
+            StatusCode::FORBIDDEN
+        );
+    }
+    let reloaded = diffrook::core::AppState::with_security(dir.path(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(
+        reloaded.license.status(&reloaded.db).await.unwrap()["edition"],
+        "teams"
+    );
+    let (_, status) = call(
+        &app,
+        "POST",
+        "/api/license/beta-plan",
+        Some(json!({"edition":"individual"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status["over_limit"], true);
+    assert_eq!(status["usage"]["automations"], 20);
+    assert_eq!(status["commercial_use"], false);
+    assert_eq!(status["features"]["sso"], false);
+}
+
+#[tokio::test]
 async fn parallel_api_creations_cannot_exceed_the_individual_quota() {
     let (_dir, state, app, cookie, input) = fixture().await;
     let mut pending = tokio::task::JoinSet::new();

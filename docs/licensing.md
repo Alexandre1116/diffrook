@@ -1,9 +1,42 @@
 # Plans and self-hosted licenses
 
-Diffrook currently runs on the customer's server. Individual is free forever
-for personal, noncommercial use, without a trial or expiry. Professional,
-freelance, employment, client, company and team use requires a paid plan,
-even for one user. Prices below are in EUR before applicable tax.
+Diffrook currently runs on the customer's server. From v0.2.0-beta.2, Individual,
+Freelancer and Teams are free during the beta program. Enterprise is excluded
+and is not available for purchase while legal and fiscal setup is incomplete.
+Individual remains free forever for personal, noncommercial use. Freelancer and
+Teams permit professional and commercial self-hosted use during the beta.
+
+## Activate a free beta plan
+
+Open **Settings > Plans and pricing** and select **Use free during beta** for
+Individual, Freelancer or Teams. The default is Individual. No card, payment,
+subscription or signed license file is needed. Each plan keeps its normal user,
+automation and SSO limits. Teams includes SSO; Freelancer does not.
+The selection persists in SQLite and takes effect immediately. A downgrade
+retains existing data and blocks additional creations above the new limit.
+An existing active signed license retains precedence and its original terms.
+
+For a fresh SSO-only instance, set `DIFFROOK_BETA_PLAN=teams` before the first
+start. A selection saved in Settings takes precedence on later restarts.
+Only Individual, Freelancer and Teams are accepted. Enterprise cannot be
+activated with this setting. All SSO users remain administrators.
+
+The beta authorization ends when the beta program ends with the first official
+stable release. It does not include stable professional use, a perpetual paid
+license or an automatic subscription. Stable builds ignore the stored beta
+selection and `DIFFROOK_BETA_PLAN`: Freelancer and Teams require a separately
+purchased signed license. Install that license before upgrading if you need to
+retain paid allowances. Without it, stable builds use Individual allowances;
+existing data is retained. The offline app does not contact a licensing server
+to detect release publication. The beta's technical entitlement is removed by
+upgrading to a stable build; the legal beta authorization remains limited to
+the beta program. See [LICENSE section 3a](../LICENSE).
+
+## Prices for the official release
+
+The following subscription prices apply to paid licensing after the beta.
+Prices are in EUR before applicable tax. Paid sales remain disabled until the
+owner confirms legal and fiscal readiness. Individual remains free forever.
 
 | Self-hosted plan | Registered users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
@@ -71,7 +104,7 @@ tokens cost EUR 9; Freelancer Cloud then totals EUR 28 that month before tax.
    request**. Visit [diffrook.dev/buy](https://diffrook.dev/buy/), import the request
    or enter the Installation ID and select the plan. Enter the licence holder name.
    The JSON is a request and quote, not a license or receipt. Purchases remain
-   disabled while payment configuration is incomplete. On an SSO-only instance,
+   disabled until legal and fiscal setup is complete and the owner reopens sales. On an SSO-only instance,
    use the Installation ID displayed before login.
 3. Save the private licence link before continuing to Stripe Checkout. After
    confirmed payment, this link provides the signed file and a billing portal.
@@ -87,7 +120,7 @@ Stripe or fetch renewals. Delivery is through the private download page, not ema
 The billing portal allows payment method updates, invoice downloads and cancellation
 at the end of the paid period. Plan changes and installation transfers require the
 owner. Lost private links require payment verification by the owner before recovery.
-Manual agreements and owner-issued files remain available. Legacy signed
+The manual issuer is retained for future authorized paid sales; new paid purchases are currently disabled. Legacy signed
 Business v1 files retain their original allowances and expiry, including
 previously issued perpetual files. New v2 subscriptions require a billing
 period, expiry and exact plan allowances.
@@ -115,15 +148,16 @@ activates a plan.
 
 ## SSO access and one-user installations
 
-New SSO identities require an active Teams or Enterprise subscription.
+New SSO identities require the free Teams beta entitlement or an active signed Teams or Enterprise subscription.
 Individual and Freelancer use local sign-in. OIDC configuration alone does not activate SSO.
 Previously provisioned identities can still sign in through the configured IdP
 after expiry, downgrade or upgrade, with signature and current allowlist checks, to retain
-access to data and Settings. New identities are blocked until a Teams or Enterprise license is active. Existing identities do not consume another slot.
+access to data and Settings. New identities require an eligible Teams beta entitlement or an active Teams or Enterprise license. Existing identities do not consume another slot.
 
 Local and SSO identities are separate; they are never automatically linked by
 username or email. A local account uses a user slot. A fresh SSO-only installation
-requires Teams or Enterprise: configure OIDC with local login disabled, obtain
+requires Teams or Enterprise. During beta, bootstrap with `DIFFROOK_BETA_PLAN=teams`.
+For paid stable releases, configure OIDC with local login disabled, obtain
 its Installation ID from the login screen, install the signed license and restart.
 The first allowlisted SSO identity creates an account. An existing local account
 can remain alongside SSO users within the plan's user allowance.
