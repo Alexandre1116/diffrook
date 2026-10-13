@@ -138,15 +138,17 @@ fn automatic_release(releases: &[Value], failed: Option<&str>, beta: bool) -> Op
         .and_then(|r| r["tag"].as_str().map(str::to_owned))
 }
 
-async fn install_latest_if_automatic(state: &AppState) -> Result<()> {
+/// Returns whether an update was staged and the service is restarting.
+async fn install_latest_if_automatic(state: &AppState) -> Result<bool> {
     if policy(state).await.as_deref() == Some("automatic") {
         if let Some(tag) = latest_available(state).await {
             install(state, &tag)
                 .await
                 .with_context(|| format!("installing {tag}"))?;
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(false)
 }
 
 async fn install(state: &AppState, tag: &str) -> Result<()> {
@@ -377,13 +379,16 @@ pub async fn set_policy(
         );
     }
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    if let Err(e) = install_latest_if_automatic(&state).await {
-        return error(
+    match install_latest_if_automatic(&state).await {
+        Ok(restarting) => {
+            let body = json!({"mode":mode,"restarting":restarting});
+            Json(body).into_response()
+        }
+        Err(e) => error(
             StatusCode::BAD_REQUEST,
             format!("Automatic update failed: {e:#}"),
-        );
+        ),
     }
-    Json(json!({"mode":mode})).into_response()
 }
 
 pub async fn set_channel(
@@ -398,13 +403,16 @@ pub async fn set_channel(
         return error(StatusCode::BAD_REQUEST, "Choose stable or beta releases");
     };
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    if let Err(e) = install_latest_if_automatic(&state).await {
-        return error(
+    match install_latest_if_automatic(&state).await {
+        Ok(restarting) => {
+            let body = json!({"channel":channel,"restarting":restarting});
+            Json(body).into_response()
+        }
+        Err(e) => error(
             StatusCode::BAD_REQUEST,
             format!("Automatic update failed: {e:#}"),
-        );
+        ),
     }
-    Json(json!({"channel":channel})).into_response()
 }
 
 pub async fn apply(

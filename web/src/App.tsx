@@ -215,6 +215,12 @@ function App() {
       setBusy(false);
     }
   }, [status?.authenticated]);
+  // Update settings may stage an update; the server then restarts and stops answering.
+  const settleUpdate = async (result: Obj) => {
+    if (!result?.restarting) return reload();
+    setNotice("Update installed. Reconnecting to Diffrook…");
+    window.setTimeout(() => window.location.reload(), 2500);
+  };
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -481,25 +487,21 @@ function App() {
               updates={data.updates}
               updatePolicy={async (mode) => {
                 try {
-                  await api("/updates/policy", "POST", { mode });
-                  await reload();
+                  await settleUpdate(await api("/updates/policy", "POST", { mode }));
                 } catch (e) {
                   setError((e as Error).message);
                 }
               }}
               updateChannel={async (channel) => {
                 try {
-                  await api("/updates/channel", "POST", { channel });
-                  await reload();
+                  await settleUpdate(await api("/updates/channel", "POST", { channel }));
                 } catch (e) {
                   setError((e as Error).message);
                 }
               }}
               applyUpdate={async (tag) => {
                 try {
-                  await api("/updates/apply", "POST", { tag });
-                  setNotice("Update installed. Reconnecting to Diffrook…");
-                  window.setTimeout(() => window.location.reload(), 2500);
+                  await settleUpdate(await api("/updates/apply", "POST", { tag }));
                 } catch (e) {
                   setError((e as Error).message);
                 }

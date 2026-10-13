@@ -132,7 +132,9 @@ try {
     assert.equal((await api('/api/updates', 'GET')).policy, 'automatic');
     assert.equal((await api('/api/updates/policy', 'POST', { mode: 'manual' })).mode, 'manual');
     assert.equal(updates.channel, 'stable');
-    assert.equal((await api('/api/updates/channel', 'POST', { channel: 'beta' })).channel, 'beta');
+    const beta = await api('/api/updates/channel', 'POST', { channel: 'beta' });
+    assert.equal(beta.channel, 'beta');
+    assert.equal(beta.restarting, false);
     assert.equal((await api('/api/updates', 'GET')).channel, 'beta');
     assert.equal((await api('/api/updates/channel', 'POST', { channel: 'stable' })).channel, 'stable');
   });
