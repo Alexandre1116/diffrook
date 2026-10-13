@@ -48,6 +48,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(crate::updates::set_policy),
         )
         .route(
+            "/api/updates/channel",
+            axum::routing::post(crate::updates::set_channel),
+        )
+        .route(
             "/api/updates/apply",
             axum::routing::post(crate::updates::apply),
         )
