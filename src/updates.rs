@@ -27,12 +27,8 @@ pub fn start(state: AppState) {
                 let mut value = state.updates.write().await;
                 value["error"] = json!("GitHub release check failed");
             }
-            if policy(&state).await.as_deref() == Some("automatic") {
-                if let Some(tag) = latest_available(&state).await {
-                    if let Err(e) = install(&state, &tag).await {
-                        tracing::error!("automatic update {tag} failed: {e:#}");
-                    }
-                }
+            if let Err(e) = install_latest_if_automatic(&state).await {
+                tracing::error!("automatic update failed: {e:#}");
             }
             interval.tick().await;
         }
@@ -106,28 +102,53 @@ async fn policy(state: &AppState) -> Option<String> {
         .flatten()
 }
 
+async fn channel(state: &AppState) -> String {
+    sqlx::query_scalar("SELECT value FROM app_settings WHERE key='updates.channel'")
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "stable".into())
+}
+
 async fn latest_available(state: &AppState) -> Option<String> {
     let failed = tokio::fs::read_to_string(state.data_dir.join("failed-update.txt"))
         .await
         .ok();
+    let beta = channel(state).await == "beta";
     let updates = state.updates.read().await;
-    automatic_release(updates["releases"].as_array()?, failed.as_deref())
+    automatic_release(updates["releases"].as_array()?, failed.as_deref(), beta)
 }
 
-fn automatic_release(releases: &[Value], failed: Option<&str>) -> Option<String> {
+fn automatic_release(releases: &[Value], failed: Option<&str>, beta: bool) -> Option<String> {
     releases
         .iter()
         .find(|r| {
-            r["newer"] == true
-                && r["supported"] == true
-                && r["prerelease"] == false
+            let stable = r["prerelease"] == false
                 && r["version"]
                     .as_str()
                     .and_then(|v| semver::Version::parse(v).ok())
-                    .is_some_and(|v| v.pre.is_empty())
+                    .is_some_and(|v| v.pre.is_empty());
+            r["newer"] == true
+                && r["supported"] == true
+                && r["prerelease"].is_boolean()
+                && (beta || stable)
                 && failed != r["tag"].as_str()
         })
         .and_then(|r| r["tag"].as_str().map(str::to_owned))
+}
+
+/// Returns whether an update was staged and the service is restarting.
+async fn install_latest_if_automatic(state: &AppState) -> Result<bool> {
+    if policy(state).await.as_deref() == Some("automatic") {
+        if let Some(tag) = latest_available(state).await {
+            install(state, &tag)
+                .await
+                .with_context(|| format!("installing {tag}"))?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 async fn install(state: &AppState, tag: &str) -> Result<()> {
@@ -327,6 +348,7 @@ pub async fn api(State(state): State<AppState>, headers: HeaderMap) -> Response 
     }
     let mut value = state.updates.read().await.clone();
     value["policy"] = json!(policy(&state).await.unwrap_or_else(|| "manual".into()));
+    value["channel"] = json!(channel(&state).await);
     Json(value).into_response()
 }
 
@@ -357,17 +379,40 @@ pub async fn set_policy(
         );
     }
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    if mode == "automatic" {
-        if let Some(tag) = latest_available(&state).await {
-            if let Err(e) = install(&state, &tag).await {
-                return error(
-                    StatusCode::BAD_REQUEST,
-                    format!("Automatic update failed: {e:#}"),
-                );
-            }
+    match install_latest_if_automatic(&state).await {
+        Ok(restarting) => {
+            let body = json!({"mode":mode,"restarting":restarting});
+            Json(body).into_response()
         }
+        Err(e) => error(
+            StatusCode::BAD_REQUEST,
+            format!("Automatic update failed: {e:#}"),
+        ),
     }
-    Json(json!({"mode":mode})).into_response()
+}
+
+pub async fn set_channel(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Response {
+    if let Err(r) = crate::routes::guard(&state, &headers, true).await {
+        return r;
+    }
+    let Some(channel @ ("stable" | "beta")) = body["channel"].as_str() else {
+        return error(StatusCode::BAD_REQUEST, "Choose stable or beta releases");
+    };
+    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
+    match install_latest_if_automatic(&state).await {
+        Ok(restarting) => {
+            let body = json!({"channel":channel,"restarting":restarting});
+            Json(body).into_response()
+        }
+        Err(e) => error(
+            StatusCode::BAD_REQUEST,
+            format!("Automatic update failed: {e:#}"),
+        ),
+    }
 }
 
 pub async fn apply(
@@ -539,15 +584,37 @@ mod tests {
             json!({"tag":"v1.5.0","version":"1.5.0","newer":true,"supported":true,"prerelease":false}),
         ];
         assert_eq!(
-            automatic_release(&releases, None).as_deref(),
+            automatic_release(&releases, None, false).as_deref(),
             Some("v1.6.0")
         );
         assert_eq!(
-            automatic_release(&releases, Some("v1.6.0")).as_deref(),
+            automatic_release(&releases, Some("v1.6.0"), false).as_deref(),
             Some("v1.5.0")
         );
-        assert!(automatic_release(&releases[..4], None).is_none());
-        assert!(automatic_release(&[], None).is_none());
+        assert!(automatic_release(&releases[..4], None, false).is_none());
+        assert!(automatic_release(&[], None, false).is_none());
+    }
+
+    #[test]
+    fn beta_channel_includes_prereleases_but_not_missing_metadata() {
+        let releases = vec![
+            json!({"tag":"v2.0.0","version":"2.0.0","newer":true,"supported":true}),
+            json!({"tag":"v1.9.0-beta.2","version":"1.9.0-beta.2","newer":true,"supported":false,"prerelease":true}),
+            json!({"tag":"v1.9.0-beta.1","version":"1.9.0-beta.1","newer":true,"supported":true,"prerelease":true}),
+            json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"supported":true,"prerelease":false}),
+        ];
+        assert_eq!(
+            automatic_release(&releases, None, true).as_deref(),
+            Some("v1.9.0-beta.1")
+        );
+        assert_eq!(
+            automatic_release(&releases, Some("v1.9.0-beta.1"), true).as_deref(),
+            Some("v1.8.0")
+        );
+        assert_eq!(
+            automatic_release(&releases, None, false).as_deref(),
+            Some("v1.8.0")
+        );
     }
 
     use std::io::Write;

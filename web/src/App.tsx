@@ -179,7 +179,7 @@ function App() {
       providers: [],
       notificationProviders: [],
       runs: [],
-      updates: { releases: [], policy: "manual" },
+      updates: { releases: [], policy: "manual", channel: "stable" },
       license: null,
       catalog: null,
     });
@@ -215,6 +215,12 @@ function App() {
       setBusy(false);
     }
   }, [status?.authenticated]);
+  // Update settings may stage an update; the server then restarts and stops answering.
+  const settleUpdate = async (result: Obj) => {
+    if (!result?.restarting) return reload();
+    setNotice("Update installed. Reconnecting to Diffrook…");
+    window.setTimeout(() => window.location.reload(), 2500);
+  };
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -481,17 +487,21 @@ function App() {
               updates={data.updates}
               updatePolicy={async (mode) => {
                 try {
-                  await api("/updates/policy", "POST", { mode });
-                  await reload();
+                  await settleUpdate(await api("/updates/policy", "POST", { mode }));
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+              updateChannel={async (channel) => {
+                try {
+                  await settleUpdate(await api("/updates/channel", "POST", { channel }));
                 } catch (e) {
                   setError((e as Error).message);
                 }
               }}
               applyUpdate={async (tag) => {
                 try {
-                  await api("/updates/apply", "POST", { tag });
-                  setNotice("Update installed. Reconnecting to Diffrook…");
-                  window.setTimeout(() => window.location.reload(), 2500);
+                  await settleUpdate(await api("/updates/apply", "POST", { tag }));
                 } catch (e) {
                   setError((e as Error).message);
                 }
@@ -865,6 +875,7 @@ function Overview({
   version,
   updates,
   updatePolicy,
+  updateChannel,
   applyUpdate,
 }: {
   data: any;
@@ -875,12 +886,14 @@ function Overview({
   version: string;
   updates: Obj;
   updatePolicy: (mode: string) => Promise<void>;
+  updateChannel: (channel: string) => Promise<void>;
   applyUpdate: (tag: string) => Promise<void>;
 }) {
   const d = data.dashboard;
   const latest = (d.recent_runs || data.runs).slice(0, 5);
   const [updating, setUpdating] = useState(false);
-  const release = (updates.releases || []).find((r: Obj) => r.newer);
+  const beta = updates.channel === "beta";
+  const release = (updates.releases || []).find((r: Obj) => r.newer && (beta || !r.prerelease));
   return (
     <>
       <div className="page-head">
@@ -957,7 +970,13 @@ function Overview({
           <label>Update policy
             <select value={updates.policy || "manual"} onChange={(e) => void updatePolicy(e.target.value)}>
               <option value="manual">Manual updates</option>
-              <option value="automatic">Automatic stable updates</option>
+              <option value="automatic">Automatic updates</option>
+            </select>
+          </label>
+          <label>Release channel
+            <select value={beta ? "beta" : "stable"} onChange={(e) => void updateChannel(e.target.value)}>
+              <option value="stable">Stable releases</option>
+              <option value="beta">Beta releases</option>
             </select>
           </label>
           {release && <button className="btn primary" disabled={updating || !release.supported} onClick={async () => { setUpdating(true); try { await applyUpdate(release.tag); } finally { setUpdating(false); } }}><ArrowDownRight size={15} />{updating ? "Updating…" : "Install update"}</button>}

@@ -187,6 +187,26 @@ async fn update_policy_is_authenticated_and_persisted() {
     let (status, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updates["policy"], "manual");
+    assert_eq!(updates["channel"], "stable");
+    for (channel, expected) in [
+        ("beta", StatusCode::OK),
+        ("nightly", StatusCode::BAD_REQUEST),
+    ] {
+        assert_eq!(
+            request(
+                &app,
+                "POST",
+                "/api/updates/channel",
+                Some(json!({ "channel": channel })),
+                Some(&cookie)
+            )
+            .await
+            .0,
+            expected
+        );
+    }
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(updates["channel"], "beta");
     assert_eq!(
         request(
             &app,

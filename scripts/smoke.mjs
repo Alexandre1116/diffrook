@@ -131,6 +131,12 @@ try {
     assert.equal((await api('/api/updates/policy', 'POST', { mode: 'automatic' })).mode, 'automatic');
     assert.equal((await api('/api/updates', 'GET')).policy, 'automatic');
     assert.equal((await api('/api/updates/policy', 'POST', { mode: 'manual' })).mode, 'manual');
+    assert.equal(updates.channel, 'stable');
+    const beta = await api('/api/updates/channel', 'POST', { channel: 'beta' });
+    assert.equal(beta.channel, 'beta');
+    assert.equal(beta.restarting, false);
+    assert.equal((await api('/api/updates', 'GET')).channel, 'beta');
+    assert.equal((await api('/api/updates/channel', 'POST', { channel: 'stable' })).channel, 'stable');
   });
   await check('CRUD, CSRF and masked credentials', async () => {
     await api('/api/connections', 'POST', {}, { headers: { 'x-diffrook-request': '' }, status: 403 });
