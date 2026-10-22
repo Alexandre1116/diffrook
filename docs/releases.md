@@ -1,6 +1,19 @@
 # Self-hosted beta releases
 
-## 0.2.0-beta.2
+## 0.2.0-beta.3
+
+New in this beta:
+
+- Connections for GitLab (gitlab.com and self-managed, including nested groups),
+  Bitbucket Cloud, Bitbucket Data Center and Gitea, alongside GitHub and Forgejo.
+  See [code hosts](../README.md#code-hosts) for tokens, repository formats and webhooks.
+- A release channel next to the update policy. The stable channel keeps
+  pre-releases out of automatic and offered updates; the beta channel includes them.
+- Refreshed TLS dependencies (rustls, rustls-webpki, webpki-roots) for recent
+  security advisories.
+
+Bitbucket Data Center has no issue tracker, so only pull request automations
+apply there. Comment commands need an allowed-actors list on every host except GitHub.
 
 This is a self-hosted beta for pilot installations. Cloud Hosting is Coming soon:
 there is no hosted deployment, Cloud activation, checkout or token billing.
@@ -29,7 +42,7 @@ Business licenses retain their original allowances and expiry.
 Install Git and Docker with Compose on the customer's server, then:
 
 ```sh
-git clone --branch v0.2.0-beta.2 --depth 1 https://github.com/Alexandre1116/diffrook.git
+git clone --branch v0.2.0-beta.3 --depth 1 https://github.com/Alexandre1116/diffrook.git
 cd diffrook
 docker compose up --build -d
 docker compose logs diffrook
@@ -56,7 +69,7 @@ Do not expose the default HTTP listener directly to the Internet.
 
 ```sh
 git fetch --tags
-git checkout v0.2.0-beta.2
+git checkout v0.2.0-beta.3
 docker compose up --build -d
 ```
 
