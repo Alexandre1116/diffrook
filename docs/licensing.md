@@ -1,6 +1,6 @@
 # Plans and self-hosted licenses
 
-Diffrook currently runs on the customer's server. From v0.2.0-beta.2, Individual,
+Oversight currently runs on the customer's server. From v0.2.0-beta.2, Individual,
 Freelancer and Teams are free during the beta program. Enterprise is excluded
 and is not available for purchase while legal and fiscal setup is incomplete.
 Individual remains free forever for personal, noncommercial use. Freelancer and
@@ -16,7 +16,7 @@ The selection persists in SQLite and takes effect immediately. A downgrade
 retains existing data and blocks additional creations above the new limit.
 An existing active signed license retains precedence and its original terms.
 
-For a fresh SSO-only instance, set `DIFFROOK_BETA_PLAN=teams` before the first
+For a fresh SSO-only instance, set `OVERSIGHT_BETA_PLAN=teams` before the first
 start. A selection saved in Settings takes precedence on later restarts.
 Only Individual, Freelancer and Teams are accepted. Enterprise cannot be
 activated with this setting. All SSO users remain administrators.
@@ -24,7 +24,7 @@ activated with this setting. All SSO users remain administrators.
 The beta authorization ends when the beta program ends with the first official
 stable release. It does not include stable professional use, a perpetual paid
 license or an automatic subscription. Stable builds ignore the stored beta
-selection and `DIFFROOK_BETA_PLAN`: Freelancer and Teams require a separately
+selection and `OVERSIGHT_BETA_PLAN`: Freelancer and Teams require a separately
 purchased signed license. Install that license before upgrading if you need to
 retain paid allowances. Without it, stable builds use Individual allowances;
 existing data is retained. The offline app does not contact a licensing server
@@ -50,7 +50,7 @@ Enterprise-only packs add ten automations for EUR 5/month or EUR 50/year. Annual
 subscriptions cost ten monthly payments, paid up front. Paid plans include
 software updates during their term; response times and availability SLAs require
 a separate agreement. Disabled automations count. Repository bot credentials
-are connections, not Diffrook users.
+are connections, not Oversight users.
 
 All self-hosted plans provide their own server and AI provider credentials or
 local model. There is no execution-based license charge; infrastructure and
@@ -80,9 +80,9 @@ infrastructure with customer isolation. Dedicated hosting and availability
 commitments require a separate quote. Hosting, backups and managed updates
 are planned subscription features.
 
-AI is separate: bring your own key and pay the provider directly, or pay Diffrook
+AI is separate: bring your own key and pay the provider directly, or pay Oversight
 monthly for managed tokens consumed. Annual discounts do not discount AI.
-Proposed Diffrook sale rates per one million tokens:
+Proposed Oversight sale rates per one million tokens:
 
 | Model | Input EUR | Output EUR |
 | --- | ---: | ---: |
@@ -109,12 +109,12 @@ tokens cost EUR 9; Freelancer Cloud then totals EUR 28 that month before tax.
 3. Save the private licence link before continuing to Stripe Checkout. After
    confirmed payment, this link provides the signed file and a billing portal.
    Keep it private: anyone with it can download the licence and manage billing.
-4. Download the signed license, mount it read-only and set `DIFFROOK_LICENSE_FILE`
+4. Download the signed license, mount it read-only and set `OVERSIGHT_LICENSE_FILE`
    to its container path. Restart and check Settings.
 
 When online checkout is enabled, Stripe charges the monthly or annual subscription
 until cancelled. Confirmed renewal payments produce a new signed file at the same
-private link. Download each renewal, replace the mounted file and restart Diffrook
+private link. Download each renewal, replace the mounted file and restart Oversight
 before the previous file expires. The self-hosted application does not connect to
 Stripe or fetch renewals. Delivery is through the private download page, not email.
 The billing portal allows payment method updates, invoice downloads and cancellation
@@ -129,13 +129,13 @@ Example Compose overlay:
 
 ```yaml
 services:
-  diffrook:
+  oversight:
     environment:
-      DIFFROOK_LICENSE_FILE: /run/secrets/diffrook_license
+      OVERSIGHT_LICENSE_FILE: /run/secrets/oversight_license
     secrets:
-      - diffrook_license
+      - oversight_license
 secrets:
-  diffrook_license:
+  oversight_license:
     file: ./secrets/customer-license.json
 ```
 
@@ -156,7 +156,7 @@ access to data and Settings. New identities require an eligible Teams beta entit
 
 Local and SSO identities are separate; they are never automatically linked by
 username or email. A local account uses a user slot. A fresh SSO-only installation
-requires Teams or Enterprise. During beta, bootstrap with `DIFFROOK_BETA_PLAN=teams`.
+requires Teams or Enterprise. During beta, bootstrap with `OVERSIGHT_BETA_PLAN=teams`.
 For paid stable releases, configure OIDC with local login disabled, obtain
 its Installation ID from the login screen, install the signed license and restart.
 The first allowlisted SSO identity creates an account. An existing local account
@@ -205,7 +205,7 @@ node scripts/license.mjs issue --request customer-request.json --customer "Compa
 ```
 
 The website's automatic issuer is configured separately in the private
-`diffrook-site` repository. It verifies Stripe webhook signatures, fetches canonical
+`oversight-site` repository. It verifies Stripe webhook signatures, fetches canonical
 paid invoices and subscriptions, calculates prices from this catalog and signs the
 paid invoice period with the existing key. Test mode must use a separate issuer key
 and database; test files must never be accepted by official production builds.

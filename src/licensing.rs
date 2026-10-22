@@ -153,14 +153,16 @@ impl License {
                     .fetch_optional(db)
                     .await?;
             let selected = saved
+                .or_else(|| std::env::var("OVERSIGHT_BETA_PLAN").ok())
                 .or_else(|| std::env::var("DIFFROOK_BETA_PLAN").ok())
                 .unwrap_or_else(|| "individual".into());
             license
                 .beta_plan
                 .store(Self::beta_plan_code(&selected)?, Ordering::SeqCst);
         }
-        if let Some(path) = std::env::var("DIFFROOK_LICENSE_FILE")
+        if let Some(path) = std::env::var("OVERSIGHT_LICENSE_FILE")
             .ok()
+            .or_else(|| std::env::var("DIFFROOK_LICENSE_FILE").ok())
             .filter(|s| !s.trim().is_empty())
         {
             ensure!(
@@ -336,7 +338,7 @@ impl License {
             installation_id,
             claims: Some(Claims {
                 version: 1,
-                product: "diffrook".into(),
+                product: "oversight".into(),
                 edition: "business".into(),
                 license_id: uuid::Uuid::new_v4(),
                 installation_id,
@@ -363,7 +365,7 @@ fn verify(bytes: &[u8], key: &VerifyingKey, installation: uuid::Uuid) -> anyhow:
         .context("Invalid license signature")?;
     let claims: Claims = serde_json::from_slice(&payload).context("Invalid license claims")?;
     ensure!(
-        claims.product == "diffrook"
+        matches!(claims.product.as_str(), "oversight" | "diffrook")
             && ((claims.version == 1 && claims.edition == "business")
                 || (claims.version == 2
                     && matches!(

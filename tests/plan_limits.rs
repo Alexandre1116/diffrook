@@ -17,7 +17,7 @@ async fn call(
         .method(method)
         .uri(path)
         .header("content-type", "application/json")
-        .header("x-diffrook-request", "1");
+        .header("x-oversight-request", "1");
     if let Some(cookie) = cookie {
         request = request.header("cookie", cookie);
     }
@@ -41,18 +41,18 @@ async fn call(
 
 async fn fixture() -> (
     tempfile::TempDir,
-    diffrook::core::AppState,
+    oversight::core::AppState,
     axum::Router,
     String,
     Value,
 ) {
     let dir = tempfile::tempdir().unwrap();
-    let state = diffrook::core::AppState::with_security(dir.path(), Default::default())
+    let state = oversight::core::AppState::with_security(dir.path(), Default::default())
         .await
         .unwrap();
-    let app = diffrook::routes::router(state.clone());
+    let app = oversight::routes::router(state.clone());
     let response = app.clone().oneshot(Request::builder().method("POST").uri("/api/setup")
-        .header("content-type","application/json").header("x-diffrook-request","1")
+        .header("content-type","application/json").header("x-oversight-request","1")
         .body(Body::from(json!({"username":"personal","password":"test-personal-password","setup_token":state.setup_token.as_ref()}).to_string())).unwrap()).await.unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let cookie = response.headers()["set-cookie"]
@@ -72,7 +72,7 @@ async fn fixture() -> (
         let mut object = object;
         object["created_at"] = json!("now");
         object["updated_at"] = json!("now");
-        diffrook::db::save_object(&state.db, kind, &object)
+        oversight::db::save_object(&state.db, kind, &object)
             .await
             .unwrap();
     }
@@ -151,7 +151,7 @@ async fn individual_api_counts_disabled_automations_and_allows_edit_delete_and_r
 #[tokio::test]
 async fn beta_plan_selection_requires_authentication_and_enforces_real_allowances() {
     let (dir, state, app, cookie, input) = fixture().await;
-    if diffrook::licensing::catalog()["beta"]["enabled"] != true {
+    if oversight::licensing::catalog()["beta"]["enabled"] != true {
         assert_eq!(
             call(
                 &app,
@@ -238,7 +238,7 @@ async fn beta_plan_selection_requires_authentication_and_enforces_real_allowance
             StatusCode::FORBIDDEN
         );
     }
-    let reloaded = diffrook::core::AppState::with_security(dir.path(), Default::default())
+    let reloaded = oversight::core::AppState::with_security(dir.path(), Default::default())
         .await
         .unwrap();
     assert_eq!(
@@ -294,7 +294,7 @@ async fn existing_over_quota_data_is_preserved_and_reported_without_allowing_mor
     input["updated_at"] = json!("now");
     for n in 0..4 {
         input["id"] = json!(format!("legacy-{n}"));
-        diffrook::db::save_object(&state.db, "automations", &input)
+        oversight::db::save_object(&state.db, "automations", &input)
             .await
             .unwrap();
     }

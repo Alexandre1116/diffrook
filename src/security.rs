@@ -81,16 +81,16 @@ impl Default for SecurityConfig {
 impl SecurityConfig {
     pub fn session_cookie_name(&self) -> &'static str {
         if self.secure_cookies {
-            "__Host-diffrook_session"
+            "__Host-oversight_session"
         } else {
-            "diffrook_session"
+            "oversight_session"
         }
     }
     pub fn oidc_cookie_name(&self) -> &'static str {
         if self.secure_cookies {
-            "__Host-diffrook_oidc"
+            "__Host-oversight_oidc"
         } else {
-            "diffrook_oidc"
+            "oversight_oidc"
         }
     }
     pub fn from_env() -> anyhow::Result<Self> {
@@ -98,34 +98,34 @@ impl SecurityConfig {
     }
 
     fn from_lookup(get: impl Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
-        let public_url = get("DIFFROOK_PUBLIC_URL")
+        let public_url = configured(&get, "OVERSIGHT_PUBLIC_URL", "DIFFROOK_PUBLIC_URL")
             .map(|v| Url::parse(&v))
             .transpose()?;
         if let Some(url) = &public_url {
             let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
             ensure!(
                 url.scheme() == "https" || (url.scheme() == "http" && loopback),
-                "DIFFROOK_PUBLIC_URL must use HTTPS, except on localhost"
+                "OVERSIGHT_PUBLIC_URL must use HTTPS, except on localhost"
             );
             ensure!(url.host_str().is_some() && url.username().is_empty() && url.password().is_none()
-                && url.path() == "/" && url.query().is_none() && url.fragment().is_none(), "DIFFROOK_PUBLIC_URL must be an origin, without a path, credentials, query or fragment");
+                && url.path() == "/" && url.query().is_none() && url.fragment().is_none(), "OVERSIGHT_PUBLIC_URL must be an origin, without a path, credentials, query or fragment");
         }
         let https = public_url.as_ref().is_some_and(|u| u.scheme() == "https");
-        let secure_cookies = boolean(get("DIFFROOK_SECURE_COOKIES"), https)?;
+        let secure_cookies = boolean(configured(&get, "OVERSIGHT_SECURE_COOKIES", "DIFFROOK_SECURE_COOKIES"), https)?;
         ensure!(
             !https || secure_cookies,
             "HTTPS public URLs require secure cookies"
         );
-        let issuer = get("DIFFROOK_OIDC_ISSUER_URL");
-        let client_id = get("DIFFROOK_OIDC_CLIENT_ID");
-        let secret_file = get("DIFFROOK_OIDC_CLIENT_SECRET_FILE");
-        let secret_env = get("DIFFROOK_OIDC_CLIENT_SECRET");
+        let issuer = configured(&get, "OVERSIGHT_OIDC_ISSUER_URL", "DIFFROOK_OIDC_ISSUER_URL");
+        let client_id = configured(&get, "OVERSIGHT_OIDC_CLIENT_ID", "DIFFROOK_OIDC_CLIENT_ID");
+        let secret_file = configured(&get, "OVERSIGHT_OIDC_CLIENT_SECRET_FILE", "DIFFROOK_OIDC_CLIENT_SECRET_FILE");
+        let secret_env = configured(&get, "OVERSIGHT_OIDC_CLIENT_SECRET", "DIFFROOK_OIDC_CLIENT_SECRET");
         ensure!(
             secret_file.is_none() || secret_env.is_none(),
             "Configure only one OIDC client secret source"
         );
-        let subjects = list(get("DIFFROOK_OIDC_ALLOWED_SUBJECTS"));
-        let emails = list(get("DIFFROOK_OIDC_ALLOWED_EMAILS"));
+        let subjects = list(configured(&get, "OVERSIGHT_OIDC_ALLOWED_SUBJECTS", "DIFFROOK_OIDC_ALLOWED_SUBJECTS"));
+        let emails = list(configured(&get, "OVERSIGHT_OIDC_ALLOWED_EMAILS", "DIFFROOK_OIDC_ALLOWED_EMAILS"));
         let any_oidc = issuer.is_some()
             || client_id.is_some()
             || secret_file.is_some()
@@ -135,10 +135,10 @@ impl SecurityConfig {
         let oidc = if any_oidc {
             ensure!(
                 https && secure_cookies,
-                "SSO requires an HTTPS DIFFROOK_PUBLIC_URL and secure cookies"
+                "SSO requires an HTTPS OVERSIGHT_PUBLIC_URL and secure cookies"
             );
-            let issuer = issuer.context("DIFFROOK_OIDC_ISSUER_URL is required")?;
-            let client_id = client_id.context("DIFFROOK_OIDC_CLIENT_ID is required")?;
+            let issuer = issuer.context("OVERSIGHT_OIDC_ISSUER_URL is required")?;
+            let client_id = client_id.context("OVERSIGHT_OIDC_CLIENT_ID is required")?;
             let client_secret = if let Some(path) = secret_file {
                 ensure!(
                     std::fs::metadata(&path)?.len() <= 65536,
@@ -176,12 +176,12 @@ impl SecurityConfig {
         } else {
             None
         };
-        let local_login = boolean(get("DIFFROOK_LOCAL_LOGIN"), oidc.is_none())?;
+        let local_login = boolean(configured(&get, "OVERSIGHT_LOCAL_LOGIN", "DIFFROOK_LOCAL_LOGIN"), oidc.is_none())?;
         ensure!(
             local_login || oidc.is_some(),
             "Disabling local login requires configured SSO"
         );
-        let session_seconds = get("DIFFROOK_SESSION_SECONDS")
+        let session_seconds = configured(&get, "OVERSIGHT_SESSION_SECONDS", "DIFFROOK_SESSION_SECONDS")
             .map(|v| v.parse::<i64>())
             .transpose()?
             .unwrap_or(8 * 3600);
@@ -189,7 +189,7 @@ impl SecurityConfig {
             (300..=86400).contains(&session_seconds),
             "Session lifetime must be between 300 and 86400 seconds"
         );
-        let trusted_proxies = list(get("DIFFROOK_TRUSTED_PROXIES"))
+        let trusted_proxies = list(configured(&get, "OVERSIGHT_TRUSTED_PROXIES", "DIFFROOK_TRUSTED_PROXIES"))
             .iter()
             .map(|s| s.parse::<IpAddr>())
             .collect::<Result<Vec<_>, _>>()?;
@@ -230,6 +230,14 @@ impl SecurityConfig {
         ))
         .expect("generated cookie is ASCII")
     }
+}
+
+fn configured(
+    get: &impl Fn(&str) -> Option<String>,
+    primary: &str,
+    legacy: &str,
+) -> Option<String> {
+    get(primary).or_else(|| get(legacy))
 }
 
 fn boolean(value: Option<String>, default: bool) -> anyhow::Result<bool> {

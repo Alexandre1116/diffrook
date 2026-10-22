@@ -1,28 +1,28 @@
-Diffrook Personal and Business License 1.3
+Oversight Personal and Business License 1.3
 
-Copyright 2026 Alexandre Ramos and Diffrook contributors.
+Copyright 2026 Alexandre Ramos and Oversight contributors.
 
 1. Scope and existing rights
 
-These terms apply to Diffrook contributions distributed under this license.
+These terms apply to Oversight contributions distributed under this license.
 They do not revoke rights already granted for material previously distributed
 under Creative Commons Attribution-NonCommercial 4.0 International, including
 versions distributed before the adoption of this license. The previous license
 is retained in docs/licenses/CC-BY-NC-4.0.txt. Third-party dependencies and other
 separately licensed material retain their respective licenses. This license
-grants only rights held by the applicable Diffrook copyright holders.
+grants only rights held by the applicable Oversight copyright holders.
 Rights previously granted under Diffrook Personal and Business License 1.0 or
 1.1 or 1.2 and existing customer agreements remain effective for their covered
 material. The previous texts are retained in docs/licenses/.
 
-Diffrook is source-available software. This license is not an OSI-approved
+Oversight is source-available software. This license is not an OSI-approved
 open-source license. Viewing the source does not grant unrestricted commercial
-use or a right to provide a hosted Diffrook service.
+use or a right to provide a hosted Oversight service.
 
 2. Individual plan: free personal, noncommercial use
 
 An individual natural person may download, install, run, copy and modify
-Diffrook without paying a license fee solely for that person's private,
+Oversight without paying a license fee solely for that person's private,
 personal, noncommercial activities. Each Individual installation is limited
 to one registered user account and three saved automations. Disabled
 automations also count toward the limit. Multiple accounts, shared accounts
@@ -37,7 +37,7 @@ AI charges are separate from the free software license.
 The Individual plan does not permit use for a company, organization or team,
 or use in employment, freelance work, consulting, client work or other
 professional or commercial activities, even when only one person uses
-Diffrook or no fee is charged for a particular task. Those uses require a
+Oversight or no fee is charged for a particular task. Those uses require a
 Business license, except for the limited free beta authorization below. The
 user's own hosting, infrastructure and AI-provider costs remain the user's
 responsibility.
@@ -46,7 +46,7 @@ responsibility.
 
 Companies, organizations, teams and individuals performing professional or
 commercial work must obtain a separate paid Business license from Alexandre
-Ramos or an authorized Diffrook licensor before operating Diffrook for those
+Ramos or an authorized Oversight licensor before operating Oversight for those
 purposes, except where the free beta authorization below applies. A Business
 license authorizes self-hosted use only within the customer, installation,
 user, automation and term limits specified in the
@@ -82,14 +82,14 @@ agreement prevail over conflicting terms in this license for that customer.
 On expiry or removal of a Business license, its additional technical creation
 allowances cease. Stored data is not automatically deleted. Continued access
 for reading, editing, deleting or exporting existing data does not extend a
-customer's contractual entitlement to operate Diffrook for business use.
+customer's contractual entitlement to operate Oversight for business use.
 Previously provisioned SSO identities may retain verified sign-in access for
 data recovery; this does not include provisioning new SSO identities or extend
 a subscription's contractual term.
 
 3a. Limited free self-hosted beta authorization
 
-Official Diffrook beta builds designated for this offer allow Individual,
+Official Oversight beta builds designated for this offer allow Individual,
 Freelancer and Teams to be used without paying a license fee during the beta
 program. Individual remains limited to personal, noncommercial use with one
 user and three saved automations. Freelancer permits professional and commercial
@@ -115,7 +115,7 @@ without a separate purchase. Existing customer agreements remain effective.
 4. Hosted subscriptions and third-party hosting
 
 The licensor may offer a separately paid subscription in which the licensor
-hosts and operates Diffrook for the customer. A hosted subscription is distinct
+hosts and operates Oversight for the customer. A hosted subscription is distinct
 from a self-hosted Business license. Availability, features, infrastructure,
 usage limits, pricing, billing, data handling, support and termination are
 subject to a separate hosted-service agreement. This license does not promise
@@ -129,7 +129,7 @@ or, once offered, pay monthly for managed AI consumption. Subscription discounts
 do not discount managed AI consumption. Hosted data isolation, backups, usage
 controls and billing require the hosted service to be launched separately.
 
-Operating, reselling or offering Diffrook as a hosted or managed service for
+Operating, reselling or offering Oversight as a hosted or managed service for
 third parties requires separate written authorization from the licensor.
 Neither the Individual plan nor a standard self-hosted Business license grants
 that right. The licensor's own authorized hosted offerings are permitted.
@@ -142,11 +142,11 @@ without a fee, provided that you retain this license, copyright notices and
 third-party notices, clearly identify your modifications and make no claim of
 official endorsement. Recipients receive only the rights granted by these
 terms or their own applicable commercial agreement. Redistribution does not
-grant a right to sell Diffrook, transfer a customer's Business entitlement,
+grant a right to sell Oversight, transfer a customer's Business entitlement,
 or operate a hosted service. No trademark rights are granted.
 
 You may not use modifications, account sharing or other arrangements to evade
-the plan limits when operating Diffrook. This restriction does not revoke
+the plan limits when operating Oversight. This restriction does not revoke
 rights separately granted under the previous CC BY-NC 4.0 license for material
 covered by that license, or rights under mandatory applicable law.
 
@@ -160,7 +160,7 @@ Rights not expressly granted here are reserved.
 
 7. Disclaimer
 
-TO THE EXTENT PERMITTED BY APPLICABLE LAW, DIFFROOK IS PROVIDED "AS IS", WITHOUT
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, OVERSIGHT IS PROVIDED "AS IS", WITHOUT
 WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS
 FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. THE COPYRIGHT HOLDERS ARE NOT
 LIABLE FOR CLAIMS, DAMAGES OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS

@@ -7,11 +7,11 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 
 test('owner CLI protects keys and issues verifiable installation-bound licenses', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'diffrook-license-tool-'));
+  const directory = await mkdtemp(join(tmpdir(), 'oversight-license-tool-'));
   t.after(async () => {
     const target = resolve(directory);
     assert.equal(dirname(target), resolve(tmpdir()));
-    assert.ok(basename(target).startsWith('diffrook-license-tool-'));
+    assert.ok(basename(target).startsWith('oversight-license-tool-'));
     await rm(target, { recursive: true, force: true });
   });
   await mkdir(join(directory, 'scripts'));
@@ -41,7 +41,7 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
   assert.equal(claims.extra_automation_packs, 2);
   assert.ok(claims.expires_at > claims.issued_at + 360 * 86400);
   assert.ok(claims.expires_at <= claims.issued_at + 366 * 86400);
-  assert.equal(claims.product, 'diffrook');
+  assert.equal(claims.product, 'oversight');
   const publicBytes = Buffer.from((await readFile(join(directory, 'src/license-public-key.hex'), 'utf8')).trim(), 'hex');
   const key = createPublicKey({ format: 'jwk', key: { kty: 'OKP', crv: 'Ed25519', x: publicBytes.toString('base64url') } });
   assert.ok(verify(null, Buffer.concat([Buffer.from('diffrook-license-v1\0'), payload]), key, Buffer.from(envelope.signature, 'base64url')));

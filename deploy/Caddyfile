@@ -10,11 +10,11 @@
 	}
 }
 
-{$DIFFROOK_DOMAIN} {
+{$OVERSIGHT_DOMAIN} {
 	request_body {
 		max_size 2MB
 	}
-	reverse_proxy diffrook:8080 {
+	reverse_proxy oversight:8080 {
 		# Host is preserved by default. Overwrite the untrusted client IP header.
 		header_up X-Real-IP {remote_host}
 	}

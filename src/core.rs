@@ -65,7 +65,8 @@ impl AppState {
             key
         } else {
             anyhow::ensure!(
-                !tokio::fs::try_exists(data_dir.join("diffrook.sqlite")).await?,
+                !tokio::fs::try_exists(data_dir.join("oversight.sqlite")).await?
+                    && !tokio::fs::try_exists(data_dir.join("diffrook.sqlite")).await?,
                 "encryption.key is missing from an existing database; restore the matching key from backup"
             );
             let mut key = [0u8; 32];
@@ -79,13 +80,22 @@ impl AppState {
             }
             key
         };
-        let db_path = data_dir.join("diffrook.sqlite");
+        let new_db_path = data_dir.join("oversight.sqlite");
+        let legacy_db_path = data_dir.join("diffrook.sqlite");
+        let db_path = if tokio::fs::try_exists(&new_db_path).await? {
+            new_db_path
+        } else if tokio::fs::try_exists(&legacy_db_path).await? {
+            legacy_db_path
+        } else {
+            new_db_path
+        };
         let db = crate::db::open(db_path.to_str().context("database path is not UTF-8")?).await?;
         let license = crate::licensing::License::load(&db).await?;
         let setup_token = if !security.local_login {
             String::new()
-        } else if let Some(token) = std::env::var("DIFFROOK_SETUP_TOKEN")
+        } else if let Some(token) = std::env::var("OVERSIGHT_SETUP_TOKEN")
             .ok()
+            .or_else(|| std::env::var("DIFFROOK_SETUP_TOKEN").ok())
             .filter(|t| !t.trim().is_empty())
         {
             token
@@ -106,7 +116,7 @@ impl AppState {
                     tokio::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
                         .await?;
                 }
-                tracing::warn!("Initial Diffrook setup token: {token}");
+                tracing::warn!("Initial Oversight setup token: {token}");
                 token
             }
         };
@@ -250,9 +260,9 @@ pub fn error(status: axum::http::StatusCode, msg: impl ToString) -> axum::respon
 }
 pub fn request_origin_ok(headers: &axum::http::HeaderMap) -> bool {
     if headers
-        .get("x-diffrook-request")
-        .and_then(|v| v.to_str().ok())
-        != Some("1")
+        !["x-oversight-request", "x-diffrook-request"]
+            .iter()
+            .any(|name| headers.get(*name).and_then(|v| v.to_str().ok()) == Some("1"))
     {
         return false;
     }
@@ -320,7 +330,7 @@ mod tests {
     fn origin_check_requires_custom_header_and_matches_host_and_port() {
         let mut h = axum::http::HeaderMap::new();
         h.insert("host", "example.test:8443".parse().unwrap());
-        h.insert("x-diffrook-request", "1".parse().unwrap());
+        h.insert("x-oversight-request", "1".parse().unwrap());
         assert!(request_origin_ok(&h));
         h.insert(
             axum::http::header::ORIGIN,
@@ -337,7 +347,7 @@ mod tests {
             "https://attacker.test:8443".parse().unwrap(),
         );
         assert!(!request_origin_ok(&h));
-        h.remove("x-diffrook-request");
+        h.remove("x-oversight-request");
         assert!(!request_origin_ok(&h));
     }
 }

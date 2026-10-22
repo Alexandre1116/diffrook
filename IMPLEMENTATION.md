@@ -1,6 +1,6 @@
-# Diffrook implementation contract
+# Oversight implementation contract
 
-Diffrook is a self-hosted repository automation service. English UI and documentation. Rust backend, React/TypeScript frontend, SQLite storage, one Docker container plus a persistent `/data` volume. The project owner selected CC BY-NC 4.0; describe the project as source-available, not OSI open source.
+Oversight is a self-hosted repository automation service. English UI and documentation. Rust backend, React/TypeScript frontend, SQLite storage, one Docker container plus a persistent `/data` volume. The project owner selected CC BY-NC 4.0; describe the project as source-available, not OSI open source.
 
 ## Ownership
 
@@ -11,7 +11,7 @@ Diffrook is a self-hosted repository automation service. English UI and document
 
 ## HTTP API contract
 
-All APIs use JSON. Errors are `{ "error": "human-readable message" }`. Authentication is an HttpOnly SameSite session cookie. Mutating authenticated requests must include `X-Diffrook-Request: 1`. No open registration after initial setup.
+All APIs use JSON. Errors are `{ "error": "human-readable message" }`. Authentication is an HttpOnly SameSite session cookie. Mutating authenticated requests must include `X-Oversight-Request: 1`. No open registration after initial setup.
 
 - `GET /api/status` -> `{setup_required: bool, authenticated: bool, version: string}`.
 - `POST /api/setup` -> `{username,password,setup_token}`; creates first admin and sets session. Setup token is generated on first boot and logged, or configured by env. Require it to prevent remote first-user takeover.
@@ -35,7 +35,7 @@ Connection: `{id,name,kind:"github"|"forgejo",base_url,token,webhook_secret,bot_
 
 Provider: `{id,name,kind:"openai"|"ollama"|"anthropic",base_url,api_key,default_model}`. OpenAI base includes `/v1`, Ollama root default `http://host.docker.internal:11434`, Anthropic root `https://api.anthropic.com`. Per-automation model overrides default.
 
-Automation: `{id,name,description,enabled,connection_id,provider_id,model,repositories:["owner/repo"],trigger:{events:["pull_request.opened","pull_request.synchronize","pull_request.ready_for_review","issues.opened","issues.labeled","issue_comment.command"],command:"/diffrook",schedule_enabled:false,cron:"0 9 * * 1",timezone:"UTC",schedule_target:"repository"|"open_pull_requests"|"open_issues",branch:"main"},filters:{labels:[],ignore_drafts:true,allowed_actors:[],ignore_paths:["vendor/**","dist/**","**/*.lock"]},action:"review"|"fix_pr"|"solve_issue"|"audit",instructions:"",limits:{max_files:200,max_file_bytes:64000,max_context_chars:180000,max_output_tokens:6000,timeout_seconds:600,max_fix_files:10},notifications:[{kind:"pr_comment"|"issue_comment"|"discord"|"slack"|"teams"|"webhook",url:""}],fix:{mode:"new_branch"|"existing_branch",branch_prefix:"diffrook/"}}`.
+Automation: `{id,name,description,enabled,connection_id,provider_id,model,repositories:["owner/repo"],trigger:{events:["pull_request.opened","pull_request.synchronize","pull_request.ready_for_review","issues.opened","issues.labeled","issue_comment.command"],command:"/oversight",schedule_enabled:false,cron:"0 9 * * 1",timezone:"UTC",schedule_target:"repository"|"open_pull_requests"|"open_issues",branch:"main"},filters:{labels:[],ignore_drafts:true,allowed_actors:[],ignore_paths:["vendor/**","dist/**","**/*.lock"]},action:"review"|"fix_pr"|"solve_issue"|"audit",instructions:"",limits:{max_files:200,max_file_bytes:64000,max_context_chars:180000,max_output_tokens:6000,timeout_seconds:600,max_fix_files:10},notifications:[{kind:"pr_comment"|"issue_comment"|"discord"|"slack"|"teams"|"webhook",url:""}],fix:{mode:"new_branch"|"existing_branch",branch_prefix:"oversight/"}}`.
 
 UI must make review/comment versus fix action explicit. Scheduled issues/PRs enumerate open matching items; repository audits target configured branch. No auto-merge. No arbitrary code execution inside main container. Fixes use structured file changes and SCM API commits. CI executes tests after publication; output explicitly states tests were not run locally. Root codebase is available through repository tree and files, with bounded multi-pass analysis and explicit coverage reporting. No universal 'safe to merge' claim.
 

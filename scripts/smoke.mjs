@@ -1,13 +1,13 @@
-// Integration test against an isolated Diffrook instance. Never use a production instance.
-// DIFFROOK_TEST_URL=http://localhost:18080 DIFFROOK_TEST_SETUP_TOKEN=... node scripts/smoke.mjs
+// Integration test against an isolated Oversight instance. Never use a production instance.
+// OVERSIGHT_TEST_URL=http://localhost:18080 OVERSIGHT_TEST_SETUP_TOKEN=... node scripts/smoke.mjs
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { createHmac, randomUUID } from 'node:crypto';
 import { writeFile, mkdir } from 'node:fs/promises';
 
-const origin = process.env.DIFFROOK_TEST_URL || 'http://localhost:18080';
-const mockPort = Number(process.env.DIFFROOK_MOCK_PORT || 19091);
-const mockOrigin = process.env.DIFFROOK_MOCK_ORIGIN || `http://host.docker.internal:${mockPort}`;
+const origin = process.env.OVERSIGHT_TEST_URL || 'http://localhost:18080';
+const mockPort = Number(process.env.OVERSIGHT_MOCK_PORT || 19091);
+const mockOrigin = process.env.OVERSIGHT_MOCK_ORIGIN || `http://host.docker.internal:${mockPort}`;
 const secret = 'integration-webhook-secret-not-a-real-credential';
 const token = 'integration-repository-token-not-a-real-credential';
 const modelKey = 'integration-model-key-not-a-real-credential';
@@ -33,7 +33,7 @@ const mock = http.createServer(async (req, res) => {
   traffic.push({ method: req.method, path, body, headers: { authorization: req.headers.authorization, signature: req.headers['x-hub-signature-256'] } });
   const send = (data, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
   const pr = { number: 7, title: 'Handle division', body: 'Improve division behavior', state: 'open', draft: false, user: { login: 'developer' }, labels: [], head: { ref: 'feature/divide', sha: branches.get('feature/divide'), repo: { full_name: 'acme/demo' } }, base: { ref: 'main', sha, repo: { full_name: 'acme/demo' } }, html_url: 'https://example.invalid/acme/demo/pull/7' };
-  if (path === '/user') return send({ login: 'diffrook-bot' });
+  if (path === '/user') return send({ login: 'oversight-bot' });
   if (['/v1/models', '/models', '/api/tags'].includes(path)) return send({ data: [{ id: 'test-model' }], models: [{ name: 'test-model' }] });
   if (['/v1/chat/completions', '/api/chat', '/v1/messages'].includes(path)) {
     if (slow) await new Promise(r => setTimeout(r, 5000));
@@ -71,7 +71,7 @@ const mock = http.createServer(async (req, res) => {
 await new Promise(resolve => mock.listen(mockPort, '0.0.0.0', resolve));
 
 async function api(path, method = 'GET', body, options = {}) {
-  const headers = { 'content-type': 'application/json', 'x-diffrook-request': '1', ...(cookie ? { cookie } : {}), ...options.headers };
+  const headers = { 'content-type': 'application/json', 'x-oversight-request': '1', ...(cookie ? { cookie } : {}), ...options.headers };
   const res = await fetch(origin + path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   const text = await res.text();
   let data;
@@ -99,7 +99,7 @@ async function waitForIdle() {
   throw new Error('Background runs did not become idle');
 }
 async function check(name, fn) { await fn(); report.push(name); console.log(`PASS ${name}`); }
-const automation = (connectionId, providerId, overrides = {}) => ({ name: 'Integration review', description: 'Local mock services only', enabled: true, connection_id: connectionId, provider_id: providerId, model: 'test-model', repositories: ['acme/demo'], trigger: { events: ['pull_request.opened', 'issue_comment.command'], command: '/diffrook', schedule_enabled: false, cron: '0 9 * * 1', timezone: 'Europe/Lisbon', schedule_target: 'repository', branch: 'main' }, filters: { labels: [], ignore_drafts: true, allowed_actors: ['developer'], ignore_paths: [] }, action: 'review', instructions: 'CHECK_AUTOMATION_INSTRUCTIONS_ARE_USED', limits: { max_files: 200, max_file_bytes: 64000, max_context_chars: 180000, max_output_tokens: 6000, timeout_seconds: 60, max_fix_files: 10 }, notifications: [{ kind: 'pr_comment', url: '' }], fix: { mode: 'new_branch', branch_prefix: 'diffrook/' }, ...overrides });
+const automation = (connectionId, providerId, overrides = {}) => ({ name: 'Integration review', description: 'Local mock services only', enabled: true, connection_id: connectionId, provider_id: providerId, model: 'test-model', repositories: ['acme/demo'], trigger: { events: ['pull_request.opened', 'issue_comment.command'], command: '/oversight', schedule_enabled: false, cron: '0 9 * * 1', timezone: 'Europe/Lisbon', schedule_target: 'repository', branch: 'main' }, filters: { labels: [], ignore_drafts: true, allowed_actors: ['developer'], ignore_paths: [] }, action: 'review', instructions: 'CHECK_AUTOMATION_INSTRUCTIONS_ARE_USED', limits: { max_files: 200, max_file_bytes: 64000, max_context_chars: 180000, max_output_tokens: 6000, timeout_seconds: 60, max_fix_files: 10 }, notifications: [{ kind: 'pr_comment', url: '' }], fix: { mode: 'new_branch', branch_prefix: 'oversight/' }, ...overrides });
 let gh, forgejo, provider, auto, notificationProvider;
 try {
   await check('Public self-hosted pricing and Cloud coming soon', async () => {
@@ -118,10 +118,10 @@ try {
     const status = await api('/api/status');
     assert.equal(status.setup_required, true, 'Use a fresh isolated database for smoke tests');
     await api('/api/connections', 'GET', undefined, { status: 401 });
-    await api('/api/setup', 'POST', { username: 'tester', password: 'Diffrook-test-password-123', setup_token: process.env.DIFFROOK_TEST_SETUP_TOKEN || 'smoke-setup-token' });
-    assert.ok(cookie.includes('diffrook_session='));
+    await api('/api/setup', 'POST', { username: 'tester', password: 'Oversight-test-password-123', setup_token: process.env.OVERSIGHT_TEST_SETUP_TOKEN || 'smoke-setup-token' });
+    assert.ok(cookie.includes('oversight_session='));
     assert.equal((await api('/api/status')).authenticated, true);
-    await api('/api/setup', 'POST', { username: 'another', password: 'Diffrook-test-password-123', setup_token: process.env.DIFFROOK_TEST_SETUP_TOKEN || 'smoke-setup-token' }, { status: 409 });
+    await api('/api/setup', 'POST', { username: 'another', password: 'Oversight-test-password-123', setup_token: process.env.OVERSIGHT_TEST_SETUP_TOKEN || 'smoke-setup-token' }, { status: 409 });
   });
   await check('Manual and automatic update policy', async () => {
     const updates = await api('/api/updates');
@@ -139,9 +139,9 @@ try {
     assert.equal((await api('/api/updates/channel', 'POST', { channel: 'stable' })).channel, 'stable');
   });
   await check('CRUD, CSRF and masked credentials', async () => {
-    await api('/api/connections', 'POST', {}, { headers: { 'x-diffrook-request': '' }, status: 403 });
-    gh = await api('/api/connections', 'POST', { name: 'Mock GitHub', kind: 'github', base_url: mockOrigin, token, webhook_secret: secret, bot_username: 'diffrook-bot' });
-    forgejo = await api('/api/connections', 'POST', { name: 'Mock Forgejo', kind: 'forgejo', base_url: mockOrigin, token, webhook_secret: secret, bot_username: 'diffrook-bot' });
+    await api('/api/connections', 'POST', {}, { headers: { 'x-oversight-request': '' }, status: 403 });
+    gh = await api('/api/connections', 'POST', { name: 'Mock GitHub', kind: 'github', base_url: mockOrigin, token, webhook_secret: secret, bot_username: 'oversight-bot' });
+    forgejo = await api('/api/connections', 'POST', { name: 'Mock Forgejo', kind: 'forgejo', base_url: mockOrigin, token, webhook_secret: secret, bot_username: 'oversight-bot' });
     assert.equal(gh.token, ''); assert.equal(gh.has_token, true);
     assert.equal((await api(`/api/connections/${gh.id}/test`, 'POST', {})).ok, true);
     assert.equal((await api(`/api/connections/${forgejo.id}/test`, 'POST', {})).ok, true);
@@ -223,7 +223,7 @@ try {
       assert.equal(run.status, 'succeeded', run.error);
       assert.match(run.output.artifacts.pull_request_url, /pull\/10$/);
       const pr = traffic.findLast(t => t.method === 'POST' && t.path.endsWith('/pulls'));
-      assert.equal(pr.body.base, 'main'); assert.match(pr.body.head, /^diffrook\//);
+      assert.equal(pr.body.base, 'main'); assert.match(pr.body.head, /^oversight\//);
       await api(`/api/automations/${a.id}`, 'DELETE');
     });
   }

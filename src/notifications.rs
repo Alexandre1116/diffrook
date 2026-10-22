@@ -14,7 +14,7 @@ pub async fn send(notification: &Value, message: &str, client: &reqwest::Client)
     let response = match kind {
         "discord" => client.post(url).json(&json!({"content":bounded(message,1900),"allowed_mentions":{"parse":[]}})).send().await,
         "slack" => client.post(url).json(&json!({"text":bounded(message,35000)})).send().await,
-        "teams" => client.post(url).json(&json!({"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"Diffrook review","weight":"Bolder"},{"type":"TextBlock","text":bounded(message,20000),"wrap":true}]}}]})).send().await,
+        "teams" => client.post(url).json(&json!({"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"Oversight review","weight":"Bolder"},{"type":"TextBlock","text":bounded(message,20000),"wrap":true}]}}]})).send().await,
         "webhook" => client.post(url).json(&json!({"text":bounded(message,28000)})).send().await,
         _ => bail!("unsupported external notification kind: {kind}"),
     }.context("sending external notification")?;
@@ -36,7 +36,7 @@ fn bounded(text: &str, limit: usize) -> String {
 }
 
 pub fn render_findings(summary: &str, findings: &[crate::types::Finding]) -> String {
-    let mut out = format!("## Diffrook\n\n{summary}\n");
+    let mut out = format!("## Oversight\n\n{summary}\n");
     if findings.is_empty() {
         out.push_str("\nNo findings.\n");
     }

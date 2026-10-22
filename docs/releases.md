@@ -13,7 +13,7 @@ are free during the beta program; Enterprise is excluded and unavailable.
 - Enterprise: excluded from free beta; new paid sales remain disabled.
 
 Select the free plan in Settings. SSO-only installations can bootstrap with
-`DIFFROOK_BETA_PLAN=teams`. No payment, card or signed beta file is required.
+`OVERSIGHT_BETA_PLAN=teams`. No payment, card or signed beta file is required.
 The first official stable release ends the beta program. Stable builds require
 paid signed licenses for Freelancer and Teams and ignore stored beta selections.
 Individual remains free forever. No automatic subscription or charge is created.
@@ -29,10 +29,10 @@ Business licenses retain their original allowances and expiry.
 Install Git and Docker with Compose on the customer's server, then:
 
 ```sh
-git clone --branch v0.2.0-beta.2 --depth 1 https://github.com/Alexandre1116/diffrook.git
-cd diffrook
+git clone --branch v0.2.0-beta.2 --depth 1 https://github.com/Alexandre1116/oversight.git
+cd oversight
 docker compose up --build -d
-docker compose logs diffrook
+docker compose logs oversight
 ```
 
 Open http://localhost:8080 and use the setup token in the logs. This release is
@@ -45,7 +45,7 @@ Do not expose the default HTTP listener directly to the Internet.
 
 1. Choose Manual updates before upgrading. Releases before 0.2 can automatically
    select pre-releases; the new stable-only policy cannot change an older binary.
-2. Stop Diffrook and back up the complete data volume, including the encryption
+2. Stop Oversight and back up the complete data volume, including the encryption
    key. Follow the backup instructions in [README](../README.md#storage-and-backups).
    Confirm that the backup can be restored to an isolated empty volume.
 3. Review the new license and quotas. Existing over-quota data is retained, but

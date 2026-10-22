@@ -21,7 +21,7 @@ export type PlanCatalog = {
   };
 };
 const money = (amount: number) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(amount);
-const instructions = "https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md";
+const instructions = "https://github.com/Alexandre1116/oversight/blob/main/docs/licensing.md";
 
 export default function Plans({ catalog, edition, installationId, notice, selectBetaPlan }: {
   catalog: PlanCatalog; edition: string; installationId: string; notice: (text: string) => void;
@@ -58,8 +58,8 @@ export default function Plans({ catalog, edition, installationId, notice, select
       quoted_amount: plan[`${period}_eur`] * (plan.per_user ? users : 1) + extra * pack[`${period}_eur`],
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(request, null, 2)], { type: "application/json" }));
-    const link = document.createElement("a"); link.href = url; link.download = `diffrook-${plan.id}-license-request.json`; link.click(); URL.revokeObjectURL(url);
-    notice("License request downloaded. Arrange payment with the Diffrook owner and obtain a signed license to activate it.");
+    const link = document.createElement("a"); link.href = url; link.download = `oversight-${plan.id}-license-request.json`; link.click(); URL.revokeObjectURL(url);
+    notice("License request downloaded. Arrange payment with the Oversight owner and obtain a signed license to activate it.");
   };
   return <section className="plan-catalog" aria-label="Plans and pricing">
     <div className="plan-catalog-head">
@@ -77,7 +77,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
     </div>
     <p className="plan-explainer">{cloud
       ? "Coming soon. Preview prices for hosting, backups and managed updates. AI usage is billed separately. Purchases and activation are unavailable."
-      : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "Run Diffrook on your server with your own AI provider or local model. Paid licenses renew monthly or annually; executions have no license quota."}</p>
+      : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "Run Oversight on your server with your own AI provider or local model. Paid licenses renew monthly or annually; executions have no license quota."}</p>
     <div className="plan-grid">{plans.map(plan => {
       const enterprise = plan.per_user;
       const amount = plan[`${period}_eur`];
@@ -114,10 +114,10 @@ export default function Plans({ catalog, edition, installationId, notice, select
     })}</div>
     {cloud ? <div className="panel-card plan-ai-preview">
       <h3>Managed AI · Coming soon</h3>
-      <p>Use your own key and pay your provider directly, or pay Diffrook for the tokens consumed each month. The annual subscription discount does not apply to AI usage.</p>
+      <p>Use your own key and pay your provider directly, or pay Oversight for the tokens consumed each month. The annual subscription discount does not apply to AI usage.</p>
       <div className="plan-table-wrap"><table><caption>Proposed rates per {catalog.cloud.ai.token_unit.toLocaleString()} tokens</caption><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody>{catalog.cloud.ai.models.map(model => <tr key={model.id}><th scope="row">{model.name}</th><td>{money(model.input_eur)}</td><td>{money(model.output_eur)}</td></tr>)}</tbody></table></div>
       <p>Cache will have separate rates. Planned controls include a monthly AI budget, alerts and a stop at the budget limit.</p>
       <p>Additional {catalog.cloud.execution_pack.executions.toLocaleString()} executions: {money(catalog.cloud.execution_pack.monthly_eur)}, with your approval, plus AI usage. Cloud limits will be validated before launch. Dedicated hosting and availability commitments require a separate quote.</p>
-    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "Download a request for the Diffrook owner. Payment and renewal are arranged directly; the request does not activate a plan. Install the signed license for this installation ID."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
+    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "Download a request for the Oversight owner. Payment and renewal are arranged directly; the request does not activate a plan. Install the signed license for this installation ID."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
   </section>;
 }

@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(form.get("grant_type").unwrap(), "authorization_code");
         assert_eq!(
             form.get("redirect_uri").unwrap(),
-            "https://diffrook.example.test/api/auth/oidc/callback"
+            "https://oversight.example.test/api/auth/oidc/callback"
         );
         assert!(headers
             .get(header::AUTHORIZATION)
@@ -522,7 +522,7 @@ mod tests {
             axum::serve(listener, app).await.unwrap();
         });
         let security = SecurityConfig {
-            public_url: Some(url::Url::parse("https://diffrook.example.test").unwrap()),
+            public_url: Some(url::Url::parse("https://oversight.example.test").unwrap()),
             secure_cookies: true,
             local_login: false,
             oidc: Some(OidcConfig {
@@ -555,7 +555,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .uri("/api/auth/oidc/start")
-                    .header("host", "diffrook.example.test")
+                    .header("host", "oversight.example.test")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -578,7 +578,7 @@ mod tests {
         assert_eq!(values["code_challenge_method"], "S256");
         assert_eq!(
             values["redirect_uri"],
-            "https://diffrook.example.test/api/auth/oidc/callback"
+            "https://oversight.example.test/api/auth/oidc/callback"
         );
         *fixture.mock.nonce.lock().await = values["nonce"].clone();
         *fixture.mock.challenge.lock().await = values["code_challenge"].clone();
@@ -588,7 +588,7 @@ mod tests {
             .unwrap()
             .to_str()
             .unwrap();
-        assert!(raw.starts_with("__Host-diffrook_oidc="));
+        assert!(raw.starts_with("__Host-oversight_oidc="));
         assert!(raw.contains("HttpOnly") && raw.contains("SameSite=Lax") && raw.contains("Secure"));
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -647,7 +647,7 @@ mod tests {
         let mut session = HeaderMap::new();
         session.insert(
             header::COOKIE,
-            format!("__Host-diffrook_session={token}").parse().unwrap(),
+            format!("__Host-oversight_session={token}").parse().unwrap(),
         );
         assert!(auth::authenticate(&fixture.state, &session)
             .await
@@ -668,7 +668,7 @@ mod tests {
         let mut other = HeaderMap::new();
         other.insert(
             header::COOKIE,
-            "__Host-diffrook_oidc=wrong-browser".parse().unwrap(),
+            "__Host-oversight_oidc=wrong-browser".parse().unwrap(),
         );
         assert!(finish(&fixture.state, &other, query(state.clone()))
             .await
@@ -706,7 +706,7 @@ mod tests {
         let mut session = HeaderMap::new();
         session.insert(
             header::COOKIE,
-            format!("__Host-diffrook_session={token}").parse().unwrap(),
+            format!("__Host-oversight_session={token}").parse().unwrap(),
         );
         assert!(auth::authenticate(&fixture.state, &session)
             .await
@@ -934,7 +934,7 @@ mod tests {
         let mut session = HeaderMap::new();
         session.insert(
             header::COOKIE,
-            format!("__Host-diffrook_session={token}").parse().unwrap(),
+            format!("__Host-oversight_session={token}").parse().unwrap(),
         );
         assert!(auth::authenticate(&fixture.state, &session)
             .await

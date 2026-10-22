@@ -1,14 +1,14 @@
 # SSO and Internet deployments
 
-Each company runs an independent Diffrook installation with its own URL, identity
-provider, credentials and data volume. No central Diffrook domain is required.
-`DIFFROOK_PUBLIC_URL` is the canonical URL used by employees to open that
+Each company runs an independent Oversight installation with its own URL, identity
+provider, credentials and data volume. No central Oversight domain is required.
+`OVERSIGHT_PUBLIC_URL` is the canonical URL used by employees to open that
 installation. It can also be a private HTTPS hostname.
 
 ## Configure OpenID Connect
 
 Register a confidential web application with the company's OpenID Connect
-provider. Use the authorization code flow and PKCE S256. Diffrook requests the
+provider. Use the authorization code flow and PKCE S256. Oversight requests the
 `openid` and `email` scopes. Register exactly this callback, substituting the
 installation's URL:
 
@@ -19,16 +19,16 @@ https://reviews.your-company.example/api/auth/oidc/callback
 Configure the installation, for example through `.env` and Compose:
 
 ```dotenv
-DIFFROOK_PUBLIC_URL=https://reviews.your-company.example
-DIFFROOK_SECURE_COOKIES=true
-DIFFROOK_OIDC_ISSUER_URL=https://identity.your-company.example/your-issuer
-DIFFROOK_OIDC_CLIENT_ID=your-application-client-id
-DIFFROOK_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
-DIFFROOK_OIDC_ALLOWED_SUBJECTS=exact-subject-claim-of-authorized-administrator
-DIFFROOK_LOCAL_LOGIN=false
+OVERSIGHT_PUBLIC_URL=https://reviews.your-company.example
+OVERSIGHT_SECURE_COOKIES=true
+OVERSIGHT_OIDC_ISSUER_URL=https://identity.your-company.example/your-issuer
+OVERSIGHT_OIDC_CLIENT_ID=your-application-client-id
+OVERSIGHT_OIDC_CLIENT_SECRET_FILE=/run/secrets/oidc_client_secret
+OVERSIGHT_OIDC_ALLOWED_SUBJECTS=exact-subject-claim-of-authorized-administrator
+OVERSIGHT_LOCAL_LOGIN=false
 ```
 
-Use the exact issuer from the provider's discovery document. Diffrook checks that
+Use the exact issuer from the provider's discovery document. Oversight checks that
 the discovery issuer matches the configured value. The issuer, discovery, JWKS,
 authorization and token endpoints must use HTTPS. Redirects are disabled for
 backchannel requests. The provider must advertise a signing algorithm and public
@@ -39,17 +39,17 @@ Authentik and Keycloak. Their application registration, issuer and claim setting
 differ. This implementation has been tested with a mock OIDC provider; a real
 provider integration must be exercised in each company's staging installation.
 
-`DIFFROOK_OIDC_ALLOWED_SUBJECTS` contains exact, comma-separated `sub` claims for
+`OVERSIGHT_OIDC_ALLOWED_SUBJECTS` contains exact, comma-separated `sub` claims for
 this application. A provider's internal user ID or Entra `oid` claim is not
 necessarily the same as `sub`. Prefer subjects because emails can change.
-Alternatively, `DIFFROOK_OIDC_ALLOWED_EMAILS` accepts exact email addresses only
+Alternatively, `OVERSIGHT_OIDC_ALLOWED_EMAILS` accepts exact email addresses only
 when the signed ID token includes `email_verified: true`. An email domain alone
 never grants access. If the provider does not emit a verified email claim, use
 subjects. At least one explicit allowlist is required.
 
 Every allowed SSO identity receives full administrator access to this single
 installation, including repository credentials and automation write settings.
-Diffrook does not currently have viewer/member roles. Only allow administrators.
+Oversight does not currently have viewer/member roles. Only allow administrators.
 Assign the IdP application to the appropriate administrators and require MFA in
 the IdP's policy.
 
@@ -62,14 +62,14 @@ access after expiry or upgrade; legacy signed Business licenses remain supported
 See [plans and licenses](licensing.md) for SSO-only bootstrap and one-user migration.
 An allowlisted administrator can sign in directly on a fresh licensed installation.
 Existing local sessions stop working when local login is disabled. Explicitly
-set `DIFFROOK_LOCAL_LOGIN=true` only if a separate local administrator login is
+set `OVERSIGHT_LOCAL_LOGIN=true` only if a separate local administrator login is
 needed. SSO identities are never linked to local accounts by email or username.
 
 The client secret remains on the server. Mount a Docker secret using an overlay:
 
 ```yaml
 services:
-  diffrook:
+  oversight:
     secrets:
       - oidc_client_secret
 secrets:
@@ -79,7 +79,7 @@ secrets:
 
 The secret file must be readable by the application container's UID 10001. Keep
 the host file and `.env` private, outside version control. A plain
-`DIFFROOK_OIDC_CLIENT_SECRET` environment variable is also supported, but do not
+`OVERSIGHT_OIDC_CLIENT_SECRET` environment variable is also supported, but do not
 configure both secret sources. SSO settings are deployment configuration and are
 not editable or exported through the web UI.
 
@@ -92,7 +92,7 @@ State is consumed atomically before token exchange to reject replay. Pending
 nonces and PKCE verifiers are encrypted in SQLite. Access/refresh/ID tokens are
 not retained or sent to the browser.
 
-Application sessions default to eight hours. `DIFFROOK_SESSION_SECONDS` accepts
+Application sessions default to eight hours. `OVERSIGHT_SESSION_SECONDS` accepts
 300 through 86400 seconds. HTTPS cookies use `Secure`, `HttpOnly`, host-only
 `__Host-` names and `SameSite=Strict`; the temporary OIDC correlation cookie uses
 `SameSite=Lax` so the IdP's top-level GET callback works. Use query-mode callbacks,
@@ -102,8 +102,8 @@ user out of the company's IdP.
 The configured allowlist is checked on each authenticated request. Removing an
 identity and restarting the application invalidates its access immediately.
 Disabling an account only in the IdP does not immediately revoke an existing
-Diffrook session. That session lasts until local logout or expiry. Choose a
-shorter session lifetime if this matters to the company's policy. Diffrook does
+Oversight session. That session lasts until local logout or expiry. Choose a
+shorter session lifetime if this matters to the company's policy. Oversight does
 not implement IdP backchannel logout, SCIM or continuous token introspection.
 
 ## Expose an installation through HTTPS
@@ -114,25 +114,25 @@ Use the company's existing HTTPS reverse proxy or the optional Caddy overlay:
 docker compose -f compose.yaml -f compose.public.yaml up --build -d
 ```
 
-Set `DIFFROOK_DOMAIN` to that company's installation hostname. For public Caddy
+Set `OVERSIGHT_DOMAIN` to that company's installation hostname. For public Caddy
 certificate issuance, its DNS must point to the server and ports 80 and 443 must
-be reachable. Keep `DIFFROOK_BIND_ADDRESS=127.0.0.1`; the backend's port 8080 stays
+be reachable. Keep `OVERSIGHT_BIND_ADDRESS=127.0.0.1`; the backend's port 8080 stays
 bound to the host loopback interface. Only the proxy's ports are exposed publicly.
 The overlay overrides the public URL and secure-cookie settings.
 
 The example uses proxy IP `172.30.99.2` on subnet `172.30.99.0/24`. Change the subnet,
-addresses and `DIFFROOK_TRUSTED_PROXIES` together if this conflicts with an existing
+addresses and `OVERSIGHT_TRUSTED_PROXIES` together if this conflicts with an existing
 network. Pin the chosen container images to reviewed versions/digests in the
 company's deployment process.
 
 For another proxy, preserve the public `Host`, including any non-default port,
 and overwrite `X-Real-IP` with the actual client IP. Configure only the proxy's
-exact source IP in `DIFFROOK_TRUSTED_PROXIES`. Do not trust forwarded IP headers
+exact source IP in `OVERSIGHT_TRUSTED_PROXIES`. Do not trust forwarded IP headers
 from arbitrary clients. Do not expose 8080 directly or let clients bypass the
 proxy. Webhooks use the same HTTPS URL and their own HMAC signatures; SSO must
 not intercept `/api/webhooks/*`.
 
-Diffrook validates the configured host and origin, requires its custom CSRF header
+Oversight validates the configured host and origin, requires its custom CSRF header
 on API mutations including login/setup/logout, sends CSP and other browser
 security headers, and marks API/HTML responses `no-store`. Its in-process limiter
 allows 30 authentication requests and 1200 other requests per client IP per minute,
@@ -166,7 +166,7 @@ appropriate to the company's private code.
 The frontend dependency audit is clean after updating `source-map-js`. The Rust
 audit reports `RUSTSEC-2023-0071` in the OIDC library's `rsa` dependency. That
 [advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html) concerns private-key
-timing leakage and currently has no patched release. Production Diffrook only
+timing leakage and currently has no patched release. Production Oversight only
 performs public-key signature verification and holds no RSA private key. CI has
 an explicit exception for that one advisory, with this applicability assessment;
 it continues to fail on other dependency vulnerabilities. Remove/reassess the
