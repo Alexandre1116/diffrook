@@ -24,8 +24,8 @@
     "automation_pack":{"enterprise_only":true,"automations":10,"monthly_eur":null,"annual_eur":null},
     "execution_pack":{"executions":1000,"monthly_eur":5,"customer_approval_required":true},
     "ai":{"status":"coming_soon","billing":"monthly_pay_as_you_go","token_unit":1000000,"cache_priced_separately":true,"models":[
-      {"id":"claude-sonnet-5-5","name":"Claude Sonnet 5.5","input_eur":3,"output_eur":15},
-      {"id":"claude-opus-5-5","name":"Claude Opus 5.5","input_eur":6,"output_eur":30}
+      {"id":"claude-sonnet-5-5","name":"Claude Sonnet 5.5","input_eur":3.57,"output_eur":17.85},
+      {"id":"claude-opus-5-5","name":"Claude Opus 5.5","input_eur":7.14,"output_eur":35.7}
     ]}
   }
 }

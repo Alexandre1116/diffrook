@@ -13,6 +13,9 @@ New in this beta:
   Teams EUR 9.99 per user/month for up to 10 users with 20 automations each,
   and Enterprise by arrangement. A free Teams beta now allows 10 users and 200
   automations. Licences signed under the earlier prices keep their allowance.
+- The Cloud preview lists managed AI at twice Anthropic's list price, in EUR,
+  and explains that your own provider key is the cheaper, recommended option.
+- The app uses the current Diffrook logo and favicon.
 - Refreshed TLS dependencies (rustls, rustls-webpki, webpki-roots) for recent
   security advisories.
 

@@ -121,7 +121,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
     })}</div>
     {cloud ? <div className="panel-card plan-ai-preview">
       <h3>Managed AI · Coming soon</h3>
-      <p>Use your own key and pay your provider directly, or pay Diffrook for the tokens consumed each month. The annual subscription discount does not apply to AI usage.</p>
+      <p>Use your own key and pay your provider directly, or pay Diffrook for the tokens consumed each month. Managed AI costs twice the provider list price on purpose: your own key is cheaper and recommended. The annual subscription discount does not apply to AI usage.</p>
       <div className="plan-table-wrap"><table><caption>Proposed rates per {catalog.cloud.ai.token_unit.toLocaleString()} tokens</caption><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody>{catalog.cloud.ai.models.map(model => <tr key={model.id}><th scope="row">{model.name}</th><td>{money(model.input_eur)}</td><td>{money(model.output_eur)}</td></tr>)}</tbody></table></div>
       <p>Cache will have separate rates. Planned controls include a monthly AI budget, alerts and a stop at the budget limit.</p>
       <p>Additional {catalog.cloud.execution_pack.executions.toLocaleString()} executions: {money(catalog.cloud.execution_pack.monthly_eur)}, with your approval, plus AI usage. Cloud limits will be validated before launch. Dedicated hosting and availability commitments require a separate quote.</p>

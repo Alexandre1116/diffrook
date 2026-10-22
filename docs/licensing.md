@@ -83,17 +83,21 @@ are planned subscription features.
 
 AI is separate: bring your own key and pay the provider directly, or pay Diffrook
 monthly for managed tokens consumed. Annual discounts do not discount AI.
-Proposed Diffrook sale rates per one million tokens:
+Managed AI is deliberately priced at twice Anthropic's API list price: using your
+own provider key costs less and is what we recommend, while managed access is for
+teams that want the simplest setup. Proposed rates per one million tokens, converted
+from Anthropic's USD list price at the ECB reference rate of 2026-10-22:
 
 | Model | Input EUR | Output EUR |
 | --- | ---: | ---: |
-| Claude Sonnet 5.5 | 3 | 15 |
-| Claude Opus 5.5 | 6 | 30 |
+| Claude Sonnet 5.5 | 3.57 | 17.85 |
+| Claude Opus 5.5 | 7.14 | 35.70 |
 
-These are proposed sale prices, not provider prices. Cache will have separate
-rates. Monthly AI budgets, alerts and stopping consumption at the budget limit
-are planned. Without caching, two million Sonnet input tokens and 200,000 output
-tokens cost EUR 9; Freelancer Cloud then totals EUR 18.99 that month before tax.
+The EUR amounts follow the exchange rate and Anthropic's list price at launch.
+Cache will have separate rates. Monthly AI budgets, alerts and stopping consumption
+at the budget limit are planned. Without caching, two million Sonnet input tokens
+and 200,000 output tokens cost EUR 10.71; Freelancer Cloud then totals EUR 20.70
+that month before tax.
 
 ## Obtain and install a paid self-hosted license
 
