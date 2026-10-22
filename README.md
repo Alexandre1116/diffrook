@@ -117,21 +117,29 @@ your free plan in Settings, without payment or a signed file. The beta offer
 does not grant a stable paid license or create automatic billing.
 The following prices are for the official release:
 
-| Self-hosted plan | Users | Saved automations | SSO | Monthly | Annual |
-| --- | ---: | ---: | :---: | ---: | ---: |
-| Individual | 1 | 3 | No | Free forever | Free |
-| Freelancer | 1 | 10 | No | EUR 9 | EUR 90 |
-| Teams | 5 | 20 | Yes | EUR 29 | EUR 290 |
-| Enterprise | Minimum 10 | 10 per licensed user, pooled | Yes | EUR 8/user | EUR 80/user |
+| Self-hosted plan | Users | Saved automations | SSO | Price |
+| --- | ---: | ---: | :---: | ---: |
+| Individual | 1 | 3 | No | Free forever |
+| Freelancer | 1 | 10 | No | €5.99 / month |
+| Teams | Up to 10 | 20 per user | Yes | €9.99 / user / month |
+| Enterprise | 10+ | 20 per user, pooled across the company | Yes | Contact us |
 
-Prices exclude applicable tax. Enterprise packs add ten automations for EUR 5/month
-or EUR 50/year. All self-hosted plans bring their own AI and infrastructure;
+Prices are in EUR and exclude applicable tax. All self-hosted plans bring their own AI and infrastructure;
 there is no execution-based license charge. Previously issued Business licenses
 remain supported. New paid sales are disabled until legal and fiscal setup is
 complete. During beta, Settings activates Individual, Freelancer or Teams for free.
 
-**Cloud Hosting: Coming soon.** The catalog previews paid hosted subscriptions,
-BYOK or managed AI billed monthly by token consumption. Cloud purchase, activation
+**Cloud Hosting: Coming soon.** Planned hosted subscriptions use the same limits:
+
+| Cloud plan | Users | Saved automations | SSO | Price |
+| --- | ---: | ---: | :---: | ---: |
+| Individual | 1 | 3 | No | €5.99 / month |
+| Freelancer | 1 | 10 | No | €9.99 / month |
+| Teams | Up to 10 | 20 per user | Yes | €14.99 / user / month |
+| Enterprise | 10+ | 20 per user, pooled across the company | Yes | Contact us |
+
+Cloud can use your own AI key or managed Claude Sonnet 5.5 and Claude Opus 5.5,
+metered per million tokens at twice Anthropic's API list price. Cloud purchase, activation
 and managed AI billing are unavailable. Hosted subscriptions will have separate
 service terms. Third-party hosting or
 resale requires separate written authorization. See [plans and license installation](docs/licensing.md).
