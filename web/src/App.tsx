@@ -206,11 +206,7 @@ const statusClass = (s = "") => `status status-${s.toLowerCase()}`;
 function Mark() {
   return (
     <div className="brand-mark">
-      <svg viewBox="0 0 36 36" aria-hidden="true">
-        <path d="M18 3.5 29.5 10v13L18 32.5 6.5 26V10L18 3.5Z" />
-        <path d="M12 13.5c0-2.1 1.5-3.5 3.6-3.5 1 0 1.9.4 2.4 1.1.6-.7 1.5-1.1 2.5-1.1 2 0 3.5 1.4 3.5 3.5v8.8c0 2.1-1.5 3.5-3.5 3.5-1 0-1.9-.4-2.5-1.1-.5.7-1.4 1.1-2.4 1.1-2.1 0-3.6-1.4-3.6-3.5v-8.8Z" />
-        <path d="M18 12v10" />
-      </svg>
+      <img src="/diffrook-logo.png" alt="" width="38" height="38" />
     </div>
   );
 }

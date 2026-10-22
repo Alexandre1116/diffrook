@@ -100,24 +100,18 @@ button:disabled {
   letter-spacing: 0.08em;
   color: #98a5bd;
 }
+/* Shown unframed, as on the website, so the navy tower stays visible. */
 .brand-mark {
-  width: 34px;
-  height: 34px;
+  width: 38px;
+  height: 38px;
   flex: 0 0 auto;
-  background: #1f2a40;
-  border: 1px solid #394b70;
-  border-radius: 10px;
   display: grid;
   place-items: center;
 }
-.brand-mark svg {
-  width: 27px;
-  height: 27px;
-  fill: none;
-  stroke: #8ba9ed;
-  stroke-width: 1.65;
-  stroke-linejoin: round;
-  stroke-linecap: round;
+.brand-mark img {
+  width: 38px;
+  height: 38px;
+  display: block;
 }
 .workspace {
   display: flex;
@@ -479,7 +473,7 @@ button:disabled {
   border-color: #4c608a;
   border-radius: 12px;
 }
-.banner-icon .brand-mark svg {
+.banner-icon .brand-mark img {
   width: 36px;
   height: 36px;
 }
