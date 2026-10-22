@@ -70,10 +70,13 @@ async fn refresh(state: &AppState) -> Result<()> {
             continue;
         };
         let newer = version > current;
-        let asset_name = format!("oversight-linux-{}.tar.gz", std::env::consts::ARCH);
+        let asset_names = [
+            format!("oversight-linux-{}.tar.gz", std::env::consts::ARCH),
+            format!("diffrook-linux-{}.tar.gz", std::env::consts::ARCH),
+        ];
         let asset = release["assets"]
             .as_array()
-            .and_then(|a| a.iter().find(|a| a["name"] == asset_name));
+            .and_then(|a| a.iter().find(|a| asset_names.iter().any(|name| a["name"] == *name)));
         releases.push(json!({
             "tag": release["tag_name"], "version": version.to_string(), "name": release["name"],
             "prerelease": release["prerelease"] == true, "published_at": release["published_at"],
@@ -288,16 +291,16 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
         anyhow::ensure!(
             parts
                 .first()
-                .is_some_and(|p| matches!(p.as_ref(), "oversight" | "web" | "LICENSE" | "licenses")),
+                .is_some_and(|p| matches!(p.as_ref(), "oversight" | "diffrook" | "web" | "LICENSE" | "licenses")),
             "unexpected file in release archive"
         );
-        if parts[0] == "oversight" || parts[0] == "LICENSE" {
+        if parts[0] == "oversight" || parts[0] == "diffrook" || parts[0] == "LICENSE" {
             anyhow::ensure!(parts.len() == 1, "unexpected root archive path");
             anyhow::ensure!(
                 entry.header().entry_type().is_file(),
                 "root archive entry must be a regular file"
             );
-            if parts[0] == "oversight" {
+            if matches!(parts[0].as_ref(), "oversight" | "diffrook") {
                 binary = true;
             }
         }
@@ -329,6 +332,10 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
         "release package is missing the application or web interface"
     );
     let binary_path = stage.join("oversight");
+    let legacy_binary_path = stage.join("diffrook");
+    if !binary_path.exists() && legacy_binary_path.exists() {
+        std::fs::rename(&legacy_binary_path, &binary_path)?;
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
