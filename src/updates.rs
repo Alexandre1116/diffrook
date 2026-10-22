@@ -74,9 +74,10 @@ async fn refresh(state: &AppState) -> Result<()> {
             format!("oversight-linux-{}.tar.gz", std::env::consts::ARCH),
             format!("diffrook-linux-{}.tar.gz", std::env::consts::ARCH),
         ];
-        let asset = release["assets"]
-            .as_array()
-            .and_then(|a| a.iter().find(|a| asset_names.iter().any(|name| a["name"] == *name)));
+        let asset = release["assets"].as_array().and_then(|a| {
+            a.iter()
+                .find(|a| asset_names.iter().any(|name| a["name"] == *name))
+        });
         releases.push(json!({
             "tag": release["tag_name"], "version": version.to_string(), "name": release["name"],
             "prerelease": release["prerelease"] == true, "published_at": release["published_at"],
@@ -289,9 +290,10 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
             })
             .collect();
         anyhow::ensure!(
-            parts
-                .first()
-                .is_some_and(|p| matches!(p.as_ref(), "oversight" | "diffrook" | "web" | "LICENSE" | "licenses")),
+            parts.first().is_some_and(|p| matches!(
+                p.as_ref(),
+                "oversight" | "diffrook" | "web" | "LICENSE" | "licenses"
+            )),
             "unexpected file in release archive"
         );
         if parts[0] == "oversight" || parts[0] == "diffrook" || parts[0] == "LICENSE" {

@@ -259,10 +259,9 @@ pub fn error(status: axum::http::StatusCode, msg: impl ToString) -> axum::respon
     (status, Json(json!({"error": message}))).into_response()
 }
 pub fn request_origin_ok(headers: &axum::http::HeaderMap) -> bool {
-    if headers
-        !["x-oversight-request", "x-diffrook-request"]
-            .iter()
-            .any(|name| headers.get(*name).and_then(|v| v.to_str().ok()) == Some("1"))
+    if !["x-oversight-request", "x-diffrook-request"]
+        .iter()
+        .any(|name| headers.get(*name).and_then(|v| v.to_str().ok()) == Some("1"))
     {
         return false;
     }

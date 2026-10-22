@@ -111,21 +111,44 @@ impl SecurityConfig {
                 && url.path() == "/" && url.query().is_none() && url.fragment().is_none(), "OVERSIGHT_PUBLIC_URL must be an origin, without a path, credentials, query or fragment");
         }
         let https = public_url.as_ref().is_some_and(|u| u.scheme() == "https");
-        let secure_cookies = boolean(configured(&get, "OVERSIGHT_SECURE_COOKIES", "DIFFROOK_SECURE_COOKIES"), https)?;
+        let secure_cookies = boolean(
+            configured(&get, "OVERSIGHT_SECURE_COOKIES", "DIFFROOK_SECURE_COOKIES"),
+            https,
+        )?;
         ensure!(
             !https || secure_cookies,
             "HTTPS public URLs require secure cookies"
         );
-        let issuer = configured(&get, "OVERSIGHT_OIDC_ISSUER_URL", "DIFFROOK_OIDC_ISSUER_URL");
+        let issuer = configured(
+            &get,
+            "OVERSIGHT_OIDC_ISSUER_URL",
+            "DIFFROOK_OIDC_ISSUER_URL",
+        );
         let client_id = configured(&get, "OVERSIGHT_OIDC_CLIENT_ID", "DIFFROOK_OIDC_CLIENT_ID");
-        let secret_file = configured(&get, "OVERSIGHT_OIDC_CLIENT_SECRET_FILE", "DIFFROOK_OIDC_CLIENT_SECRET_FILE");
-        let secret_env = configured(&get, "OVERSIGHT_OIDC_CLIENT_SECRET", "DIFFROOK_OIDC_CLIENT_SECRET");
+        let secret_file = configured(
+            &get,
+            "OVERSIGHT_OIDC_CLIENT_SECRET_FILE",
+            "DIFFROOK_OIDC_CLIENT_SECRET_FILE",
+        );
+        let secret_env = configured(
+            &get,
+            "OVERSIGHT_OIDC_CLIENT_SECRET",
+            "DIFFROOK_OIDC_CLIENT_SECRET",
+        );
         ensure!(
             secret_file.is_none() || secret_env.is_none(),
             "Configure only one OIDC client secret source"
         );
-        let subjects = list(configured(&get, "OVERSIGHT_OIDC_ALLOWED_SUBJECTS", "DIFFROOK_OIDC_ALLOWED_SUBJECTS"));
-        let emails = list(configured(&get, "OVERSIGHT_OIDC_ALLOWED_EMAILS", "DIFFROOK_OIDC_ALLOWED_EMAILS"));
+        let subjects = list(configured(
+            &get,
+            "OVERSIGHT_OIDC_ALLOWED_SUBJECTS",
+            "DIFFROOK_OIDC_ALLOWED_SUBJECTS",
+        ));
+        let emails = list(configured(
+            &get,
+            "OVERSIGHT_OIDC_ALLOWED_EMAILS",
+            "DIFFROOK_OIDC_ALLOWED_EMAILS",
+        ));
         let any_oidc = issuer.is_some()
             || client_id.is_some()
             || secret_file.is_some()
@@ -176,23 +199,34 @@ impl SecurityConfig {
         } else {
             None
         };
-        let local_login = boolean(configured(&get, "OVERSIGHT_LOCAL_LOGIN", "DIFFROOK_LOCAL_LOGIN"), oidc.is_none())?;
+        let local_login = boolean(
+            configured(&get, "OVERSIGHT_LOCAL_LOGIN", "DIFFROOK_LOCAL_LOGIN"),
+            oidc.is_none(),
+        )?;
         ensure!(
             local_login || oidc.is_some(),
             "Disabling local login requires configured SSO"
         );
-        let session_seconds = configured(&get, "OVERSIGHT_SESSION_SECONDS", "DIFFROOK_SESSION_SECONDS")
-            .map(|v| v.parse::<i64>())
-            .transpose()?
-            .unwrap_or(8 * 3600);
+        let session_seconds = configured(
+            &get,
+            "OVERSIGHT_SESSION_SECONDS",
+            "DIFFROOK_SESSION_SECONDS",
+        )
+        .map(|v| v.parse::<i64>())
+        .transpose()?
+        .unwrap_or(8 * 3600);
         ensure!(
             (300..=86400).contains(&session_seconds),
             "Session lifetime must be between 300 and 86400 seconds"
         );
-        let trusted_proxies = list(configured(&get, "OVERSIGHT_TRUSTED_PROXIES", "DIFFROOK_TRUSTED_PROXIES"))
-            .iter()
-            .map(|s| s.parse::<IpAddr>())
-            .collect::<Result<Vec<_>, _>>()?;
+        let trusted_proxies = list(configured(
+            &get,
+            "OVERSIGHT_TRUSTED_PROXIES",
+            "DIFFROOK_TRUSTED_PROXIES",
+        ))
+        .iter()
+        .map(|s| s.parse::<IpAddr>())
+        .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             public_url,
             secure_cookies,

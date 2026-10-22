@@ -1646,7 +1646,10 @@ mod tests {
     #[test]
     fn comment_command_requires_exact_token_prefix() {
         assert!(matches_command("/oversight please review", "/oversight"));
-        assert!(!matches_command("/oversighting please review", "/oversight"));
+        assert!(!matches_command(
+            "/oversighting please review",
+            "/oversight"
+        ));
         assert!(!matches_command("hello /oversight", "/oversight"));
     }
     #[tokio::test]

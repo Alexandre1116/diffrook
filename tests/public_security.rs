@@ -3,11 +3,11 @@ use axum::{
     extract::ConnectInfo,
     http::{header, HeaderMap, Request, StatusCode},
 };
+use http_body_util::BodyExt;
 use oversight::{
     core::AppState,
     security::{OidcConfig, SecurityConfig},
 };
-use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use tower::ServiceExt;

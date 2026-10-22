@@ -4,7 +4,8 @@ use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let data_dir = env_value("OVERSIGHT_DATA_DIR", "DIFFROOK_DATA_DIR").unwrap_or_else(|| "./data".into());
+    let data_dir =
+        env_value("OVERSIGHT_DATA_DIR", "DIFFROOK_DATA_DIR").unwrap_or_else(|| "./data".into());
     if oversight::updates::exec_active(std::path::Path::new(&data_dir))? {
         unreachable!();
     }
@@ -17,7 +18,8 @@ async fn main() -> anyhow::Result<()> {
     oversight::updates::start(state.clone());
     oversight::routes::start_worker(state.clone());
     oversight::scheduler::start(state.clone());
-    let web_dir = env_value("OVERSIGHT_WEB_DIR", "DIFFROOK_WEB_DIR").unwrap_or_else(|| "./web/dist".into());
+    let web_dir =
+        env_value("OVERSIGHT_WEB_DIR", "DIFFROOK_WEB_DIR").unwrap_or_else(|| "./web/dist".into());
     let index = std::path::Path::new(&web_dir).join("index.html");
     let restart_state = state.clone();
     let security_state = state.clone();
