@@ -6,9 +6,14 @@ Diffrook uses a Rust service, a React web interface, and SQLite. The application
 
 The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
 
-This version is the **0.2.0-beta.1 self-hosted preview**. Cloud Hosting remains
+This version is the **0.2.0-beta.3 self-hosted preview**. Cloud Hosting remains
 Coming soon and cannot be purchased or activated. See [release and upgrade
 instructions](docs/releases.md) before upgrading an older installation.
+
+> **Security audit pending.** Diffrook has not yet completed an independent
+> security audit. We are waiting for that audit; until it is finished, review
+> the [security scope](docs/sso-and-internet.md#verification-and-scope) before
+> connecting production repositories.
 
 ## Run with Docker
 
