@@ -1,6 +1,6 @@
 use aes_gcm::{
     aead::{Aead, KeyInit},
-    Aes256Gcm, Nonce,
+    Aes256Gcm,
 };
 use anyhow::Context;
 use axum::{http::header, response::IntoResponse, Json};
@@ -160,7 +160,7 @@ impl AppState {
         let mut data = nonce.to_vec();
         data.extend(
             cipher
-                .encrypt(Nonce::clone_from_slice(&nonce), plain.as_bytes())
+                .encrypt((&nonce[..]).into(), plain.as_bytes())
                 .map_err(|_| anyhow::anyhow!("encryption failed"))?,
         );
         Ok(format!("enc:{}", STANDARD.encode(data)))
@@ -173,7 +173,7 @@ impl AppState {
         anyhow::ensure!(data.len() >= 28, "invalid encrypted value");
         let cipher = Aes256Gcm::new_from_slice(self.key.as_ref())?;
         let bytes = cipher
-            .decrypt(Nonce::clone_from_slice(&data[..12]), &data[12..])
+            .decrypt((&data[..12]).into(), &data[12..])
             .map_err(|_| anyhow::anyhow!("decryption failed"))?;
         Ok(String::from_utf8(bytes)?)
     }
