@@ -3,11 +3,11 @@ use axum::{
     extract::ConnectInfo,
     http::{header, HeaderMap, Request, StatusCode},
 };
-use http_body_util::BodyExt;
-use oversight::{
+use diffrook::{
     core::AppState,
     security::{OidcConfig, SecurityConfig},
 };
+use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use tower::ServiceExt;
@@ -33,7 +33,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
     let state = AppState::with_security(dir.path(), public_config())
         .await
         .unwrap();
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     let setup = json!({"username":"admin","password":"test-administrator-password","setup_token":state.setup_token.as_ref()});
     for path in ["/api/setup", "/api/login", "/api/logout"] {
         let response = app
@@ -56,7 +56,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
                 .clone()
                 .oneshot(
                     request("POST", path)
-                        .header("x-oversight-request", "1")
+                        .header("x-diffrook-request", "1")
                         .header(header::ORIGIN, origin)
                         .body(Body::from(setup.to_string()))
                         .unwrap(),
@@ -74,7 +74,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
         .clone()
         .oneshot(
             request("POST", "/api/setup")
-                .header("x-oversight-request", "1")
+                .header("x-diffrook-request", "1")
                 .header(header::ORIGIN, "https://review.example.test")
                 .body(Body::from(setup.to_string()))
                 .unwrap(),
@@ -88,7 +88,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
         .unwrap()
         .to_str()
         .unwrap();
-    assert!(cookie.starts_with("__Host-oversight_session="));
+    assert!(cookie.starts_with("__Host-diffrook_session="));
     assert!(
         cookie.contains("HttpOnly")
             && cookie.contains("SameSite=Strict")
@@ -109,7 +109,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
         .oneshot(
             request("POST", "/api/logout")
                 .header("cookie", &cookie)
-                .header("x-oversight-request", "1")
+                .header("x-diffrook-request", "1")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -118,7 +118,7 @@ async fn public_authentication_enforces_origin_csrf_cookie_security_and_logout_r
     assert_eq!(response.status(), StatusCode::OK);
     let mut headers = HeaderMap::new();
     headers.insert("cookie", cookie.parse().unwrap());
-    assert!(oversight::auth::authenticate(&state, &headers)
+    assert!(diffrook::auth::authenticate(&state, &headers)
         .await
         .unwrap()
         .is_none());
@@ -130,7 +130,7 @@ async fn incorrect_host_and_spoofed_forwarded_headers_do_not_bypass_limits() {
     let state = AppState::with_security(dir.path(), public_config())
         .await
         .unwrap();
-    let app = oversight::routes::router(state);
+    let app = diffrook::routes::router(state);
     let response = app
         .clone()
         .oneshot(
@@ -206,20 +206,20 @@ async fn sso_only_disables_setup_passwords_and_existing_local_sessions() {
     let mut headers = HeaderMap::new();
     headers.insert(
         "cookie",
-        format!("__Host-oversight_session={token}").parse().unwrap(),
+        format!("__Host-diffrook_session={token}").parse().unwrap(),
     );
-    assert!(oversight::auth::authenticate(&state, &headers)
+    assert!(diffrook::auth::authenticate(&state, &headers)
         .await
         .unwrap()
         .is_none());
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     for path in ["/api/setup", "/api/login"] {
         let body = json!({"username":"admin","password":"administrator-password","setup_token":state.setup_token.as_ref()});
         let response = app
             .clone()
             .oneshot(
                 request("POST", path)
-                    .header("x-oversight-request", "1")
+                    .header("x-diffrook-request", "1")
                     .body(Body::from(body.to_string()))
                     .unwrap(),
             )
@@ -249,7 +249,7 @@ async fn oversized_authentication_and_database_failure_are_rejected_without_inte
     let state = AppState::with_security(dir.path(), SecurityConfig::default())
         .await
         .unwrap();
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     let response = app
         .clone()
         .oneshot(
@@ -257,7 +257,7 @@ async fn oversized_authentication_and_database_failure_are_rejected_without_inte
                 .method("POST")
                 .uri("/api/login")
                 .header("content-type", "application/json")
-                .header("x-oversight-request", "1")
+                .header("x-diffrook-request", "1")
                 .body(Body::from(
                     json!({"username":"a","password":"x".repeat(17000)}).to_string(),
                 ))
@@ -273,8 +273,8 @@ async fn oversized_authentication_and_database_failure_are_rejected_without_inte
             Request::builder()
                 .method("POST")
                 .uri("/api/logout")
-                .header("x-oversight-request", "1")
-                .header("cookie", "oversight_session=test-session")
+                .header("x-diffrook-request", "1")
+                .header("cookie", "diffrook_session=test-session")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -322,7 +322,7 @@ async fn webhook_fixture(state: &AppState) {
         object["created_at"] = json!(if object["id"] == "a1" { "2" } else { "1" });
         object["updated_at"] = json!("1");
         state.protect(kind, &mut object).unwrap();
-        oversight::db::save_object(&state.db, kind, &object)
+        diffrook::db::save_object(&state.db, kind, &object)
             .await
             .unwrap();
     }
@@ -363,15 +363,15 @@ async fn webhook_ignores_automations_for_incompatible_target_kinds() {
         .await
         .unwrap();
     webhook_fixture(&state).await;
-    let mut automation = oversight::db::object(&state.db, "automations", "a2")
+    let mut automation = diffrook::db::object(&state.db, "automations", "a2")
         .await
         .unwrap()
         .unwrap();
     automation["action"] = json!("solve_issue");
-    oversight::db::save_object(&state.db, "automations", &automation)
+    diffrook::db::save_object(&state.db, "automations", &automation)
         .await
         .unwrap();
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     let (status, body) = deliver(&app, "pr-with-issue-automation").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["queued"], 1);
@@ -389,7 +389,7 @@ async fn partial_webhook_enqueue_failure_can_be_retried_without_duplicate_jobs()
         .await
         .unwrap();
     webhook_fixture(&state).await;
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     sqlx::query("CREATE TRIGGER fail_second_run BEFORE INSERT ON runs WHEN NEW.automation_id='a2' BEGIN SELECT RAISE(FAIL,'simulated queue failure'); END").execute(&state.db).await.unwrap();
     assert_eq!(
         deliver(&app, "delivery-1").await.0,
@@ -429,7 +429,7 @@ async fn full_run_queue_rejects_webhooks_without_marking_them_received() {
         .unwrap();
     webhook_fixture(&state).await;
     sqlx::query("WITH RECURSIVE ids(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM ids WHERE n<1000) INSERT INTO runs(id,automation_id,body,created_at,status) SELECT 'existing-'||n,'a1','{}','now','queued' FROM ids").execute(&state.db).await.unwrap();
-    let app = oversight::routes::router(state.clone());
+    let app = diffrook::routes::router(state.clone());
     assert_eq!(
         deliver(&app, "queue-full").await.0,
         StatusCode::SERVICE_UNAVAILABLE

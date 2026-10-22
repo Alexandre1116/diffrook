@@ -118,7 +118,7 @@ impl Scm {
         if self.kind == "github" {
             request = request
                 .header("x-github-api-version", "2022-11-28")
-                .header("user-agent", "Oversight");
+                .header("user-agent", "Diffrook");
         }
         request
     }
@@ -796,7 +796,7 @@ mod tests {
     }
     #[test]
     fn branch_names_may_have_safe_slash_components() {
-        assert_eq!(branch_path("oversight/run-1").unwrap(), "oversight/run-1");
+        assert_eq!(branch_path("diffrook/run-1").unwrap(), "diffrook/run-1");
         assert!(branch_path("../main").is_err())
     }
     #[tokio::test]
@@ -812,11 +812,11 @@ mod tests {
                 (
                     "POST",
                     "/api/v1/repos/acme/widget/branches",
-                    r#"{"new_branch_name":"oversight/run-1","old_ref_name":"main"}"#,
+                    r#"{"new_branch_name":"diffrook/run-1","old_ref_name":"main"}"#,
                 ),
                 (
                     "GET",
-                    "/api/v1/repos/acme/widget/branches/oversight/run-1",
+                    "/api/v1/repos/acme/widget/branches/diffrook/run-1",
                     "",
                 ),
                 (
@@ -869,8 +869,8 @@ mod tests {
                     }
                 }
                 let response = match index {
-                    0 => r#"{"name":"oversight/run-1"}"#,
-                    1 => r#"{"name":"oversight/run-1","commit":{"sha":"aabbcc"}}"#,
+                    0 => r#"{"name":"diffrook/run-1"}"#,
+                    1 => r#"{"name":"diffrook/run-1","commit":{"sha":"aabbcc"}}"#,
                     2 => {
                         r#"{"truncated":false,"tree":[{"path":"src/main.rs","type":"blob","mode":"100644","sha":"old-file"}]}"#
                     }
@@ -893,13 +893,13 @@ mod tests {
         let conn =
             json!({"kind":"forgejo","base_url":format!("http://{address}"),"token":"test-token"});
         let scm = Scm::from_connection(&conn, &client).unwrap();
-        scm.create_branch_from_ref("acme/widget", "oversight/run-1", "main")
+        scm.create_branch_from_ref("acme/widget", "diffrook/run-1", "main")
             .await
             .unwrap();
         let sha = scm
             .commit_changes(
                 "acme/widget",
-                "oversight/run-1",
+                "diffrook/run-1",
                 "aabbcc",
                 &[FileChange {
                     path: "src/main.rs".into(),
@@ -913,7 +913,7 @@ mod tests {
         let seen = server.await.unwrap();
         assert!(seen[0].2.contains("old_ref_name"));
         let upload: Value = serde_json::from_str(&seen[3].2).unwrap();
-        assert_eq!(upload["branch"], "oversight/run-1");
+        assert_eq!(upload["branch"], "diffrook/run-1");
         assert_eq!(
             base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,

@@ -1,11 +1,11 @@
 # Optional overlay: docker compose -f compose.yaml -f compose.public.yaml up --build -d
-# Every installation supplies its own OVERSIGHT_DOMAIN and OIDC configuration.
+# Every installation supplies its own DIFFROOK_DOMAIN and OIDC configuration.
 services:
-  oversight:
+  diffrook:
     environment:
-      OVERSIGHT_PUBLIC_URL: https://${OVERSIGHT_DOMAIN:?Set the company installation domain}
-      OVERSIGHT_SECURE_COOKIES: "true"
-      OVERSIGHT_TRUSTED_PROXIES: 172.30.99.2
+      DIFFROOK_PUBLIC_URL: https://${DIFFROOK_DOMAIN:?Set the company installation domain}
+      DIFFROOK_SECURE_COOKIES: "true"
+      DIFFROOK_TRUSTED_PROXIES: 172.30.99.2
     networks:
       edge:
         ipv4_address: 172.30.99.3
@@ -17,7 +17,7 @@ services:
       - "80:80"
       - "443:443"
     environment:
-      OVERSIGHT_DOMAIN: ${OVERSIGHT_DOMAIN:?Set the company installation domain}
+      DIFFROOK_DOMAIN: ${DIFFROOK_DOMAIN:?Set the company installation domain}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
@@ -26,7 +26,7 @@ services:
       edge:
         ipv4_address: 172.30.99.2
     depends_on:
-      oversight:
+      diffrook:
         condition: service_healthy
     security_opt:
       - no-new-privileges:true

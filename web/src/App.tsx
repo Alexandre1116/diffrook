@@ -75,7 +75,7 @@ async function api<T = any>(
     credentials: "same-origin",
     headers: {
       ...(body ? { "Content-Type": "application/json" } : {}),
-      ...(method === "GET" ? {} : { "X-Oversight-Request": "1" }),
+      ...(method === "GET" ? {} : { "X-Diffrook-Request": "1" }),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -86,7 +86,7 @@ async function api<T = any>(
 }
 const emptyTrigger = {
   events: ["pull_request.opened"],
-  command: "/oversight",
+  command: "/diffrook",
   schedule_enabled: false,
   cron: "0 9 * * 1",
   timezone: "UTC",
@@ -120,7 +120,7 @@ const blankAutomation = (): Obj => ({
   instructions: "",
   limits: { ...emptyLimits },
   notifications: [],
-  fix: { mode: "new_branch", branch_prefix: "oversight/" },
+  fix: { mode: "new_branch", branch_prefix: "diffrook/" },
 });
 const events = [
   "pull_request.opened",
@@ -218,7 +218,7 @@ function App() {
   // Update settings may stage an update; the server then restarts and stops answering.
   const settleUpdate = async (result: Obj) => {
     if (!result?.restarting) return reload();
-    setNotice("Update installed. Reconnecting to Oversight…");
+    setNotice("Update installed. Reconnecting to Diffrook…");
     window.setTimeout(() => window.location.reload(), 2500);
   };
   useEffect(() => {
@@ -332,7 +332,7 @@ function App() {
       <div className="splash">
         <Mark />
         <LoaderCircle className="spin" size={18} />
-        Connecting to Oversight
+        Connecting to Diffrook
       </div>
     );
   if (!status.authenticated)
@@ -355,7 +355,7 @@ function App() {
         <div className="brand">
           <Mark />
           <div>
-            <strong>oversight</strong>
+            <strong>diffrook</strong>
             <span>REPOSITORY AUTOMATION</span>
           </div>
           <button className="mobile-close" onClick={() => setMobile(false)}>
@@ -449,7 +449,7 @@ function App() {
             <Menu size={19} />
           </button>
           <div className="breadcrumbs">
-            <span>Oversight</span>
+            <span>Diffrook</span>
             <span className="crumb-slash">/</span>
             <strong>{pageTitle}</strong>
           </div>
@@ -776,13 +776,13 @@ function Auth({
       <div className="auth-card">
         <div className="auth-brand">
           <Mark />
-          <span>oversight</span>
+          <span>diffrook</span>
         </div>
         <div className="auth-kicker">SELF-HOSTED REPOSITORY AUTOMATION</div>
         <h1>{setup ? "Set up your workspace" : "Welcome back"}</h1>
         <p>
           {setup
-            ? "Create the administrator account for this Oversight instance."
+            ? "Create the administrator account for this Diffrook instance."
             : "Sign in to manage your repository automations."}
         </p>
         {sso && (
@@ -793,7 +793,7 @@ function Auth({
         {ssoRequiresLicense && <div className="auth-license-note" role="status">
           <p>SSO requires an active Teams or Enterprise license. Ask the instance administrator to install a signed license.</p>
           {!localLogin && <p>Installation ID: <code>{installationId}</code></p>}
-          <a className="text-btn" href="https://github.com/Alexandre1116/oversight/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a>
+          <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a>
         </div>}
         {sso && localLogin && <p className="auth-separator">Or use your local administrator account</p>}
         {localLogin && <form onSubmit={submit} className="form-stack">
@@ -861,7 +861,7 @@ function Auth({
           rules.
         </div>
       </div>
-      <div className="auth-version">OVERSIGHT · PRIVATE BY DESIGN</div>
+      <div className="auth-version">DIFFROOK · PRIVATE BY DESIGN</div>
     </div>
   );
 }
@@ -918,7 +918,7 @@ function Overview({
           <Mark />
         </div>
         <div>
-          <span className="banner-eyebrow">OVERSIGHT IS READY</span>
+          <span className="banner-eyebrow">DIFFROOK IS READY</span>
           <b>Good code deserves a second set of eyes.</b>
           <p>
             Connect a repository and an AI provider to start your first
@@ -958,7 +958,7 @@ function Overview({
       </div>
       <section className="panel-card release-panel">
         <div className="release-copy">
-          <div className="eyebrow">OVERSIGHT RELEASES</div>
+          <div className="eyebrow">DIFFROOK RELEASES</div>
           <h2>{release ? `Version ${release.version} is available` : "Version updates"}</h2>
           <p>{release ? `${release.prerelease ? "Pre-release" : "Release"} published ${date(release.published_at)}. ${release.supported ? "A compatible Linux package is ready." : "No update package for this platform yet."}` : `You are running the latest version, ${version}.`}</p>
           <div className="release-list">
@@ -1254,7 +1254,7 @@ function AutomationPage({
           <div className="eyebrow">WORKFLOWS</div>
           <h1>Automations</h1>
           <p>
-            Define when Oversight should inspect or update your repositories.
+            Define when Diffrook should inspect or update your repositories.
           </p>
         </div>
         <button className="btn primary" onClick={create} disabled={!canCreate} title={!canCreate ? "Plan limit reached. See Settings." : undefined}>
@@ -1450,7 +1450,7 @@ function ResourcePage({
           <h1>{isConn ? "Connections" : isNotif ? "Notification providers" : "AI providers"}</h1>
           <p>
             {isConn
-              ? "Connect GitHub or Forgejo so Oversight can read and act on repository events."
+              ? "Connect GitHub or Forgejo so Diffrook can read and act on repository events."
               : isNotif
                 ? "Configure reusable Discord, Slack, Teams, or webhook destinations for your automations."
                 : "Choose the models that power reviews, issue fixes, and audits."}
@@ -1706,7 +1706,7 @@ function SettingsPage({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "oversight-config.json";
+    a.download = "diffrook-config.json";
     a.click();
     URL.revokeObjectURL(url);
     notice("Configuration export downloaded");
@@ -1735,8 +1735,8 @@ function SettingsPage({
             {data.license.expires_at && <div className="settings-line"><span>Expires</span><b>{date(new Date(data.license.expires_at * 1000).toISOString())}</b></div>}
             <div className="settings-line"><span>Installation ID</span><code>{data.license.installation_id}</code></div>
             {data.license.over_limit && <p role="alert">Existing data exceeds this plan's limits. It is retained for editing, deletion and export. Additional creations are blocked at the applicable limit.</p>}
-            <p>{data.license.can_select_beta_plan ? "Disabled automations count. Select your free beta plan below; no signed file or payment is needed. Individual remains personal and noncommercial." : "Disabled automations count. To activate a paid plan, request a signed license for this installation ID, mount it through OVERSIGHT_LICENSE_FILE and restart."}</p>
-            <a className="text-btn" href="https://github.com/Alexandre1116/oversight/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
+            <p>{data.license.can_select_beta_plan ? "Disabled automations count. Select your free beta plan below; no signed file or payment is needed. Individual remains personal and noncommercial." : "Disabled automations count. To activate a paid plan, request a signed license for this installation ID, mount it through DIFFROOK_LICENSE_FILE and restart."}</p>
+            <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
           </div>
         </section>}
         <section className="panel-card setting-panel">
@@ -1746,7 +1746,7 @@ function SettingsPage({
           <div>
             <h3>Instance details</h3>
             <p>
-              Oversight runs on your server. No data is sent to a central
+              Diffrook runs on your server. No data is sent to a central
               service.
             </p>
             <div className="settings-line">
@@ -1795,7 +1795,7 @@ function SettingsPage({
             </p>
             <a
               className="text-btn"
-              href="https://github.com/Alexandre1116/oversight#run-with-docker"
+              href="https://github.com/Alexandre1116/diffrook#run-with-docker"
               target="_blank"
               rel="noreferrer"
             >
@@ -1841,7 +1841,7 @@ function Modal({
       >
         <div className="modal-header">
           <div>
-            <div className="eyebrow">OVERSIGHT CONFIGURATION</div>
+            <div className="eyebrow">DIFFROOK CONFIGURATION</div>
             <h2>{title}</h2>
           </div>
           <button className="icon-btn" onClick={close}>
@@ -1957,7 +1957,7 @@ function ResourceForm({
               {show ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
-          <small>Webhook URLs contain secrets. Oversight encrypts them at rest and never displays them after saving.</small>
+          <small>Webhook URLs contain secrets. Diffrook encrypts them at rest and never displays them after saving.</small>
         </label>
       ) : (
       <>
@@ -1978,7 +1978,7 @@ function ResourceForm({
         <small>
           {isConn
             ? "For Forgejo, use the instance root."
-            : "Use a reachable URL from the Oversight server."}
+            : "Use a reachable URL from the Diffrook server."}
         </small>
       </label>
       <label>
@@ -2030,7 +2030,7 @@ function ResourceForm({
             <input
               value={v.bot_username || ""}
               onChange={(e) => change("bot_username", e.target.value)}
-              placeholder="oversight-bot"
+              placeholder="diffrook-bot"
             />
             <small>Used to ignore events created by this connection.</small>
           </label>
@@ -2107,7 +2107,7 @@ function AutomationForm({
     trigger: { ...emptyTrigger, ...item.trigger },
     filters: { ...blankAutomation().filters, ...item.filters },
     limits: { ...emptyLimits, ...item.limits },
-    fix: { mode: "new_branch", branch_prefix: "oversight/", ...item.fix },
+    fix: { mode: "new_branch", branch_prefix: "diffrook/", ...item.fix },
     notifications: (item.notifications || []).map((n: Obj) => ({
       ...n,
       id: n.id || crypto.randomUUID(),
@@ -2310,7 +2310,7 @@ function AutomationForm({
             <ShieldCheck size={16} />
             <span>
               Reviews publish comments only when a comment channel is selected.
-              Fix actions can write code. Oversight never merges a pull request.
+              Fix actions can write code. Diffrook never merges a pull request.
             </span>
           </div>
         </section>
@@ -2332,7 +2332,7 @@ function AutomationForm({
               onChange={(e) => upd("repositories", arr(e.target.value))}
               placeholder={"acme/api\nacme/web"}
             />
-            <small>Oversight will only act on these repositories.</small>
+            <small>Diffrook will only act on these repositories.</small>
           </label>
         </section>
         <section className="editor-section">
@@ -2374,7 +2374,7 @@ function AutomationForm({
             <input
               value={v.trigger.command || ""}
               onChange={(e) => nested("trigger", "command", e.target.value)}
-              placeholder="/oversight"
+              placeholder="/diffrook"
             />
             <small>Used when issue_comment.command is enabled.</small>
           </label>
@@ -2599,7 +2599,7 @@ function AutomationForm({
                   onChange={(e) =>
                     nested("fix", "branch_prefix", e.target.value)
                   }
-                  placeholder="oversight/"
+                  placeholder="diffrook/"
                 />
               </label>
             </div>
@@ -2805,7 +2805,7 @@ function RunForm({
       <div className="field-callout">
         <ShieldCheck size={15} />
         <span>
-          Oversight will use this automation's connection, model, filters, and
+          Diffrook will use this automation's connection, model, filters, and
           limits.
         </span>
       </div>

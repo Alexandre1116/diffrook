@@ -37,23 +37,23 @@ jobs:
           # Review this scoped exception if cryptographic usage changes.
           # See docs/sso-and-internet.md for RUSTSEC-2023-0071 and its scope.
           cargo audit --ignore RUSTSEC-2023-0071
-      - run: docker build -t oversight:test .
+      - run: docker build -t diffrook:test .
       - name: Container integration smoke test
         run: |
-          docker run -d --name oversight-smoke -p 127.0.0.1:18080:8080 \
+          docker run -d --name diffrook-smoke -p 127.0.0.1:18080:8080 \
             --add-host host.docker.internal:host-gateway \
-            -e OVERSIGHT_SETUP_TOKEN=smoke-setup-token oversight:test
+            -e DIFFROOK_SETUP_TOKEN=smoke-setup-token diffrook:test
           for attempt in $(seq 1 30); do
             if curl --fail --silent http://127.0.0.1:18080/healthz; then break; fi
             sleep 1
           done
           node scripts/smoke.mjs
         env:
-          OVERSIGHT_TEST_URL: http://127.0.0.1:18080
-          OVERSIGHT_TEST_SETUP_TOKEN: smoke-setup-token
+          DIFFROOK_TEST_URL: http://127.0.0.1:18080
+          DIFFROOK_TEST_SETUP_TOKEN: smoke-setup-token
       - name: Clean up smoke container
         if: always()
-        run: docker rm -f -v oversight-smoke || true
+        run: docker rm -f -v diffrook-smoke || true
 
   release-package:
     if: github.event_name == 'workflow_dispatch'
@@ -81,23 +81,23 @@ jobs:
       - run: |
           version=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
           test "v$version" = "$RELEASE_TAG"
-      - run: docker build --target server -t oversight-release-builder:latest .
+      - run: docker build --target server -t diffrook-release-builder:latest .
       - run: |
           mkdir -p bundle/web
-          cid=$(docker create oversight-release-builder:latest)
-          docker cp "$cid:/oversight" bundle/oversight
+          cid=$(docker create diffrook-release-builder:latest)
+          docker cp "$cid:/diffrook" bundle/diffrook
           docker rm "$cid"
           cp -R web/dist/. bundle/web/
           # Keep notices under web/ so pre-0.2 update extractors accept the package.
           mkdir -p bundle/web/licenses
           cp LICENSE bundle/web/licenses/LICENSE
           cp -R docs/licenses/. bundle/web/licenses/
-          tar -czf "oversight-linux-${{ matrix.arch }}.tar.gz" -C bundle oversight web
+          tar -czf "diffrook-linux-${{ matrix.arch }}.tar.gz" -C bundle diffrook web
       - name: Test the packaged binary and backup restoration
-        run: bash scripts/release-smoke.sh "oversight-linux-${{ matrix.arch }}.tar.gz"
+        run: bash scripts/release-smoke.sh "diffrook-linux-${{ matrix.arch }}.tar.gz"
       - name: Upload validated packages
         run: |
-          archive="oversight-linux-${{ matrix.arch }}.tar.gz"
+          archive="diffrook-linux-${{ matrix.arch }}.tar.gz"
           sha256sum "$archive" > "$archive.sha256"
           gh release upload "$RELEASE_TAG" "$archive" "$archive.sha256" --repo "$GITHUB_REPOSITORY" --clobber
         env:

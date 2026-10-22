@@ -78,14 +78,14 @@ try {
     const expiry = options.expires ? Math.floor(Date.parse(options.expires) / 1000) : Math.floor(expiryDate.getTime() / 1000);
     if (!Number.isSafeInteger(expiry) || expiry <= issued) throw new Error('--expires must be a future ISO date/time');
     const key = createPrivateKey(await readFile(privatePath));
-    if (key.asymmetricKeyType !== 'ed25519' || publicHex(key) !== (await readFile(publicPath, 'utf8')).trim()) throw new Error('Signing key does not match the public key compiled into Oversight');
-    const payload = Buffer.from(JSON.stringify({ version: 2, product: 'oversight', edition: plan.id, billing_period: options.period, extra_automation_packs: packs, license_id: randomUUID(), installation_id: options.installation.toLowerCase(), customer: options.customer.trim(), issued_at: issued, expires_at: expiry, max_users: users, max_automations: automations }));
+    if (key.asymmetricKeyType !== 'ed25519' || publicHex(key) !== (await readFile(publicPath, 'utf8')).trim()) throw new Error('Signing key does not match the public key compiled into Diffrook');
+    const payload = Buffer.from(JSON.stringify({ version: 2, product: 'diffrook', edition: plan.id, billing_period: options.period, extra_automation_packs: packs, license_id: randomUUID(), installation_id: options.installation.toLowerCase(), customer: options.customer.trim(), issued_at: issued, expires_at: expiry, max_users: users, max_automations: automations }));
     const signature = sign(null, Buffer.concat([Buffer.from('diffrook-license-v1\0'), payload]), key);
     const output = resolve(options.out);
     await mkdir(dirname(output), { recursive: true });
     await writeFile(output, JSON.stringify({ payload: payload.toString('base64url'), signature: signature.toString('base64url') }) + '\n', { flag: 'wx', mode: 0o600 });
     console.log(`${plan.name} license written to ${output}: ${users} user(s), ${automations} automations, ${price} EUR/${options.period === 'annual' ? 'year' : 'month'} before tax. This tool does not collect payment.`);
-    console.log('Install it through OVERSIGHT_LICENSE_FILE and restart.');
+    console.log('Install it through DIFFROOK_LICENSE_FILE and restart.');
     }
   } else {
     throw new Error('Usage: node scripts/license.mjs init | quote --request FILE | issue --request FILE --customer NAME --out FILE [--expires ISO_DATE] | issue --plan freelancer|teams|enterprise --period monthly|annual --installation UUID --customer NAME --out FILE [--expires ISO_DATE] [--users N --automation-packs N (Enterprise only)]');

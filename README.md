@@ -1,10 +1,10 @@
-# Oversight
+# Diffrook
 
 Self-hosted code review and repository automations for GitHub and Forgejo. Choose when an automation runs, which model it uses, whether it reviews or writes a fix, and where it posts the result.
 
-Oversight uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
+Diffrook uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
 
-The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Oversight verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
+The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
 
 This version is the **0.2.0-beta.1 self-hosted preview**. Cloud Hosting remains
 Coming soon and cannot be purchased or activated. See [release and upgrade
@@ -14,12 +14,12 @@ instructions](docs/releases.md) before upgrading an older installation.
 
 ```sh
 docker compose up --build -d
-docker compose logs oversight
+docker compose logs diffrook
 ```
 
 Open `http://localhost:8080`. Use the setup token printed in the logs to create the first administrator. The setup token is not an AI API key. Provider keys and repository tokens are entered in the web interface after setup.
 
-The included Compose file binds to localhost. Copy `.env.example` to `.env` to change the address or port. For remote access, put the service behind an HTTPS reverse proxy and set `OVERSIGHT_SECURE_COOKIES=true`. Proxy requests and webhooks to port 8080.
+The included Compose file binds to localhost. Copy `.env.example` to `.env` to change the address or port. For remote access, put the service behind an HTTPS reverse proxy and set `DIFFROOK_SECURE_COOKIES=true`. Proxy requests and webhooks to port 8080.
 
 The container runs as UID 10001 without a Docker socket, privileged access, or a separate database service. A bind-mounted data directory must be writable by UID 10001. The named volume in the example handles this automatically.
 
@@ -44,7 +44,7 @@ Each automation has its own model. Models must follow structured-output instruct
 
 Reviews use the repository tree and file contents to inspect changes in context. Runs record coverage and skipped content when configured limits are reached. A completed review is not proof that a merge is safe.
 
-Comment-only automations do not write code. Fix automations can create a branch and PR, or update an existing PR branch when explicitly configured. Oversight does not merge PRs automatically.
+Comment-only automations do not write code. Fix automations can create a branch and PR, or update an existing PR branch when explicitly configured. Diffrook does not merge PRs automatically.
 
 The initial execution mode prepares file changes through the platform APIs. It does not run repository scripts, install dependencies, or execute generated code inside the application container. Configure the repository's CI to build and test proposed changes. Run output distinguishes analysis from test verification.
 
@@ -55,9 +55,9 @@ Configuration, sessions, run history and the encryption key live under `/data`. 
 Stop the application before copying the volume so the SQLite database and its write-ahead log stay consistent:
 
 ```sh
-docker compose stop oversight
-docker run --rm -v YOUR_VOLUME_NAME:/data:ro -v "$PWD/backups:/backup" alpine tar czf /backup/oversight-data.tgz -C /data .
-docker compose start oversight
+docker compose stop diffrook
+docker run --rm -v YOUR_VOLUME_NAME:/data:ro -v "$PWD/backups:/backup" alpine tar czf /backup/diffrook-data.tgz -C /data .
+docker compose start diffrook
 ```
 
 Use `docker volume ls` to find the actual Compose volume name. Keep backups private because they include the encryption key. Restore to an empty volume while the application is stopped and preserve file ownership.
@@ -74,7 +74,7 @@ cd ..
 cargo run
 ```
 
-Use `OVERSIGHT_WEB_DIR=web/dist` and `OVERSIGHT_DATA_DIR=data` for a local run if needed. For frontend hot reload, run `npm run dev` in `web` while the Rust API is running.
+Use `DIFFROOK_WEB_DIR=web/dist` and `DIFFROOK_DATA_DIR=data` for a local run if needed. For frontend hot reload, run `npm run dev` in `web` while the Rust API is running.
 
 ```sh
 cargo fmt --all -- --check
@@ -90,9 +90,9 @@ This is the first implementation. GitHub and Forgejo are the initial platforms. 
 
 ## License
 
-Copyright 2026 Alexandre Ramos and Oversight contributors.
+Copyright 2026 Alexandre Ramos and Diffrook contributors.
 
-Oversight is source-available under the [Oversight Personal and Business License](LICENSE).
+Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
 The free Individual plan permits personal, noncommercial self-hosted use with
 **one user and three saved automations**, including disabled automations. Company,
 team, employment, freelance and other professional use requires a paid plan

@@ -14,7 +14,7 @@ use std::{
     time::Duration,
 };
 
-const RELEASES: &str = "https://api.github.com/repos/Alexandre1116/oversight/releases?per_page=25";
+const RELEASES: &str = "https://api.github.com/repos/Alexandre1116/diffrook/releases?per_page=25";
 const MAX_ARCHIVE: usize = 180 * 1024 * 1024;
 const MAX_EXTRACTED: u64 = 300 * 1024 * 1024;
 
@@ -44,7 +44,7 @@ async fn refresh(state: &AppState) -> Result<()> {
         .get(RELEASES)
         .header(
             reqwest::header::USER_AGENT,
-            concat!("Oversight/", env!("CARGO_PKG_VERSION")),
+            concat!("Diffrook/", env!("CARGO_PKG_VERSION")),
         )
         .send()
         .await
@@ -70,14 +70,10 @@ async fn refresh(state: &AppState) -> Result<()> {
             continue;
         };
         let newer = version > current;
-        let asset_names = [
-            format!("oversight-linux-{}.tar.gz", std::env::consts::ARCH),
-            format!("diffrook-linux-{}.tar.gz", std::env::consts::ARCH),
-        ];
-        let asset = release["assets"].as_array().and_then(|a| {
-            a.iter()
-                .find(|a| asset_names.iter().any(|name| a["name"] == *name))
-        });
+        let asset_name = format!("diffrook-linux-{}.tar.gz", std::env::consts::ARCH);
+        let asset = release["assets"]
+            .as_array()
+            .and_then(|a| a.iter().find(|a| a["name"] == asset_name));
         releases.push(json!({
             "tag": release["tag_name"], "version": version.to_string(), "name": release["name"],
             "prerelease": release["prerelease"] == true, "published_at": release["published_at"],
@@ -203,7 +199,7 @@ async fn install(state: &AppState, tag: &str) -> Result<()> {
         .build()?;
     let response = client
         .get(url)
-        .header(reqwest::header::USER_AGENT, "Oversight updater")
+        .header(reqwest::header::USER_AGENT, "Diffrook updater")
         .send()
         .await
         .context("downloading release package")?;
@@ -230,7 +226,7 @@ async fn install(state: &AppState, tag: &str) -> Result<()> {
     tokio::fs::write(&tmp, serde_json::to_vec(&descriptor)?).await?;
     tokio::fs::rename(tmp, state.data_dir.join("active-update.json")).await?;
     tracing::warn!(
-        "Installing Oversight {}; the service will restart",
+        "Installing Diffrook {}; the service will restart",
         release["version"]
     );
     // The HTTP server drains this response before exiting. Signal while still
@@ -290,19 +286,18 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
             })
             .collect();
         anyhow::ensure!(
-            parts.first().is_some_and(|p| matches!(
-                p.as_ref(),
-                "oversight" | "diffrook" | "web" | "LICENSE" | "licenses"
-            )),
+            parts
+                .first()
+                .is_some_and(|p| matches!(p.as_ref(), "diffrook" | "web" | "LICENSE" | "licenses")),
             "unexpected file in release archive"
         );
-        if parts[0] == "oversight" || parts[0] == "diffrook" || parts[0] == "LICENSE" {
+        if parts[0] == "diffrook" || parts[0] == "LICENSE" {
             anyhow::ensure!(parts.len() == 1, "unexpected root archive path");
             anyhow::ensure!(
                 entry.header().entry_type().is_file(),
                 "root archive entry must be a regular file"
             );
-            if matches!(parts[0].as_ref(), "oversight" | "diffrook") {
+            if parts[0] == "diffrook" {
                 binary = true;
             }
         }
@@ -333,11 +328,7 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
         binary && web_index,
         "release package is missing the application or web interface"
     );
-    let binary_path = stage.join("oversight");
-    let legacy_binary_path = stage.join("diffrook");
-    if !binary_path.exists() && legacy_binary_path.exists() {
-        std::fs::rename(&legacy_binary_path, &binary_path)?;
-    }
+    let binary_path = stage.join("diffrook");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -474,7 +465,7 @@ pub fn exec_active(data_dir: &Path) -> Result<bool> {
     if target == current {
         if std::env::current_exe()
             .ok()
-            .is_some_and(|exe| !exe.starts_with(root.join("oversight")))
+            .is_some_and(|exe| !exe.starts_with(root.join("diffrook")))
         {
             std::fs::remove_file(path)?;
         }
@@ -484,7 +475,7 @@ pub fn exec_active(data_dir: &Path) -> Result<bool> {
         let tag = descriptor["tag"].as_str().unwrap_or(version);
         std::fs::write(data_dir.join("failed-update.txt"), tag)?;
         std::fs::remove_file(path)?;
-        tracing::error!("Oversight update {tag} did not start; restored the container version");
+        tracing::error!("Diffrook update {tag} did not start; restored the container version");
         return Ok(false);
     }
     let mut descriptor = descriptor;
@@ -492,16 +483,16 @@ pub fn exec_active(data_dir: &Path) -> Result<bool> {
     let tmp = data_dir.join("active-update.json.tmp");
     std::fs::write(&tmp, serde_json::to_vec(&descriptor)?)?;
     std::fs::rename(tmp, path)?;
-    let bin = root.join("oversight");
+    let bin = root.join("diffrook");
     anyhow::ensure!(bin.is_file(), "active update binary is missing");
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
         let err = std::process::Command::new(bin)
             .args(std::env::args_os().skip(1))
-            .env("OVERSIGHT_WEB_DIR", root.join("web"))
+            .env("DIFFROOK_WEB_DIR", root.join("web"))
             .exec();
-        Err(anyhow::anyhow!("restarting Oversight from update: {err}"))
+        Err(anyhow::anyhow!("restarting Diffrook from update: {err}"))
     }
     #[cfg(not(unix))]
     {
@@ -635,7 +626,7 @@ mod tests {
             flate2::write::GzEncoder::new(raw.reopen().unwrap(), flate2::Compression::fast());
         let mut builder = tar::Builder::new(encoder);
         for (path, bytes) in [
-            ("oversight", b"binary".as_slice()),
+            ("diffrook", b"binary".as_slice()),
             ("web/index.html", b"index".as_slice()),
             ("web/assets/app.js", b"app".as_slice()),
             ("LICENSE", b"current license".as_slice()),
@@ -678,7 +669,7 @@ mod tests {
             ("secrets/key.pem", tar::EntryType::Regular),
             ("LICENSE/extra", tar::EntryType::Regular),
             ("licenses/link", tar::EntryType::Symlink),
-            ("oversight", tar::EntryType::Directory),
+            ("diffrook", tar::EntryType::Directory),
             ("web/index.html", tar::EntryType::Directory),
         ] {
             let dir = tempfile::tempdir().unwrap();

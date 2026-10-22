@@ -1334,7 +1334,7 @@ async fn test_notification_provider(
     }
     match crate::notifications::send(
         &p,
-        "Oversight test notification. This channel is configured correctly.",
+        "Diffrook test notification. This channel is configured correctly.",
         &s.client,
     )
     .await
@@ -1469,7 +1469,7 @@ async fn webhook(
         if action == "issue_comment.command"
             && !matches_command(
                 command,
-                a["trigger"]["command"].as_str().unwrap_or("/oversight"),
+                a["trigger"]["command"].as_str().unwrap_or("/diffrook"),
             )
         {
             continue;
@@ -1645,12 +1645,9 @@ mod tests {
     }
     #[test]
     fn comment_command_requires_exact_token_prefix() {
-        assert!(matches_command("/oversight please review", "/oversight"));
-        assert!(!matches_command(
-            "/oversighting please review",
-            "/oversight"
-        ));
-        assert!(!matches_command("hello /oversight", "/oversight"));
+        assert!(matches_command("/diffrook please review", "/diffrook"));
+        assert!(!matches_command("/diffrooking please review", "/diffrook"));
+        assert!(!matches_command("hello /diffrook", "/diffrook"));
     }
     #[tokio::test]
     async fn interrupted_runs_are_persistently_marked_failed() {
