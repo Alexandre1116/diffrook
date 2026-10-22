@@ -5,12 +5,12 @@ One Rust process serves the API and static web interface, accepts webhook delive
 ```mermaid
 flowchart LR
     UI[Web interface] --> API[Rust API]
-    Events[GitHub / Forgejo webhooks] --> API
+    Events[Code host webhooks] --> API
     Schedule[Timezone-aware scheduler] --> Queue[Persistent job queue]
     API --> Queue
     API --> DB[(SQLite)]
     Queue --> Worker[Automation worker]
-    Worker --> SCM[GitHub / Forgejo API]
+    Worker --> SCM[GitHub / GitLab / Bitbucket / Forgejo / Gitea API]
     Worker --> AI[OpenAI-compatible / Ollama / Anthropic]
     Worker --> Result[Findings and proposed fixes]
     Result --> DB

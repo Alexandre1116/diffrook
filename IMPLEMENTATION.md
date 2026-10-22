@@ -24,14 +24,14 @@ All APIs use JSON. Errors are `{ "error": "human-readable message" }`. Authentic
 - `POST /api/automations/{id}/run` -> `{kind:"pull_request"|"issue"|"repository", repository:"owner/repo", number?:123, branch?:"main"}` queues run -> Run.
 - `POST /api/runs/{id}/cancel` cancels queued/running run. `POST /api/runs/{id}/retry` queues new run.
 - `POST /api/schedule/preview` -> `{cron:"0 9 * * 1",timezone:"Europe/Lisbon"}` returns `{next:[ISO date strings]}`.
-- `POST /api/webhooks/{connection_id}` receives signed GitHub/Forgejo webhook. No session auth; require HMAC signature. Do not trigger own bot events or commands from unauthorized actors.
+- `POST /api/webhooks/{connection_id}` receives code host webhooks. No session auth; require the host's HMAC signature, or the shared secret token for GitLab. Do not trigger own bot events or commands from unauthorized actors.
 - `GET /healthz` public health response.
 
 ## Configuration JSON
 
 Every stored object has `id`, `created_at`, `updated_at`. Core encrypts sensitive fields at rest and does not return plaintext secrets. GET responses have blank secret values plus `has_token`, `has_api_key`, `has_webhook_secret`, `has_url` flags. Empty secret in updates preserves current value. Full decrypted records reach engine only. Connections and providers are selected using ids.
 
-Connection: `{id,name,kind:"github"|"forgejo",base_url,token,webhook_secret,bot_username}`. GitHub `base_url` is API base, default `https://api.github.com`; Forgejo is instance root, engine appends `/api/v1`. Test token through `/user`.
+Connection: `{id,name,kind:"github"|"gitlab"|"bitbucket"|"bitbucket_datacenter"|"forgejo"|"gitea",base_url,token,webhook_secret,bot_username}`. GitHub `base_url` is API base, default `https://api.github.com`. GitLab defaults to `https://gitlab.com` and the engine appends `/api/v4`. Bitbucket Cloud defaults to `https://api.bitbucket.org` and appends `/2.0`. Bitbucket Data Center, Forgejo and Gitea need the instance root; the engine appends `/rest/api/latest` or `/api/v1`. Test the token through the host's identity endpoint.
 
 Provider: `{id,name,kind:"openai"|"ollama"|"anthropic",base_url,api_key,default_model}`. OpenAI base includes `/v1`, Ollama root default `http://host.docker.internal:11434`, Anthropic root `https://api.anthropic.com`. Per-automation model overrides default.
 

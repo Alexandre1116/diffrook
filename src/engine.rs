@@ -708,6 +708,7 @@ async fn publish_notifications(
                 "pr_comment" if kind == "pull_request" => {
                     scm.post_comment(
                         repo,
+                        true,
                         pr.ok_or_else(|| anyhow!("missing PR number"))?,
                         &message,
                     )
@@ -716,6 +717,7 @@ async fn publish_notifications(
                 "issue_comment" if kind == "issue" => {
                     scm.post_comment(
                         repo,
+                        false,
                         pr.ok_or_else(|| anyhow!("missing issue number"))?,
                         &message,
                     )

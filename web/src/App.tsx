@@ -21,6 +21,7 @@ import {
   GitBranch,
   GitPullRequest,
   Github,
+  Gitlab,
   KeyRound,
   LayoutDashboard,
   LoaderCircle,
@@ -130,6 +131,60 @@ const events = [
   "issues.labeled",
   "issue_comment.command",
 ];
+// Code hosts a connection can use. The server accepts the same ids.
+const codeHosts: Record<
+  string,
+  { label: string; base: string; baseLabel: string; baseHint: string; token: string; secret: string }
+> = {
+  github: {
+    label: "GitHub",
+    base: "https://api.github.com",
+    baseLabel: "API base URL",
+    baseHint: "Use https://api.github.com, or https://HOST/api/v3 for GitHub Enterprise Server.",
+    token: "Personal access token with repository read and write access.",
+    secret: "Use the same secret in the repository webhook.",
+  },
+  gitlab: {
+    label: "GitLab",
+    base: "https://gitlab.com",
+    baseLabel: "Instance URL",
+    baseHint: "Use https://gitlab.com or the root of your self-managed GitLab.",
+    token: "Personal, project or group access token with the api scope.",
+    secret: "Paste the same value in the webhook's Secret token field.",
+  },
+  bitbucket: {
+    label: "Bitbucket Cloud",
+    base: "https://api.bitbucket.org",
+    baseLabel: "API base URL",
+    baseHint: "Keep https://api.bitbucket.org for Bitbucket Cloud.",
+    token: "Workspace or repository access token, or email:API token for an Atlassian account.",
+    secret: "Paste the same value in the webhook's Secret field.",
+  },
+  bitbucket_datacenter: {
+    label: "Bitbucket Data Center",
+    base: "",
+    baseLabel: "Instance URL",
+    baseHint: "Use the root of your Bitbucket Data Center, for example https://bitbucket.example.com.",
+    token: "HTTP access token with repository write permission.",
+    secret: "Paste the same value in the webhook's Secret field. Data Center has no issue tracker, so only pull request automations apply.",
+  },
+  forgejo: {
+    label: "Forgejo",
+    base: "",
+    baseLabel: "Instance URL",
+    baseHint: "Use the Forgejo instance root.",
+    token: "Access token with repository and issue write scopes.",
+    secret: "Use the same secret in the repository webhook.",
+  },
+  gitea: {
+    label: "Gitea",
+    base: "",
+    baseLabel: "Instance URL",
+    baseHint: "Use the Gitea instance root.",
+    token: "Access token with repository and issue write scopes.",
+    secret: "Use the same secret in the repository webhook.",
+  },
+};
 const nav: { id: Page; label: string; icon: any }[] = [
   { id: "overview", label: "Overview", icon: LayoutDashboard },
   { id: "automations", label: "Automations", icon: Bot },
@@ -1027,7 +1082,7 @@ function Overview({
               {
                 ok: data.connections.length > 0,
                 label: "Connect a code host",
-                sub: "GitHub or Forgejo",
+                sub: "GitHub, GitLab, Bitbucket, Forgejo or Gitea",
                 go: "connections" as Page,
                 icon: GitBranch,
               },
@@ -1450,7 +1505,7 @@ function ResourcePage({
           <h1>{isConn ? "Connections" : isNotif ? "Notification providers" : "AI providers"}</h1>
           <p>
             {isConn
-              ? "Connect GitHub or Forgejo so Diffrook can read and act on repository events."
+              ? "Connect GitHub, GitLab, Bitbucket, Forgejo or Gitea so Diffrook can read and act on repository events."
               : isNotif
                 ? "Configure reusable Discord, Slack, Teams, or webhook destinations for your automations."
                 : "Choose the models that power reviews, issue fixes, and audits."}
@@ -1489,6 +1544,8 @@ function ResourcePage({
                 {isConn ? (
                   item.kind === "github" ? (
                     <Github size={20} />
+                  ) : item.kind === "gitlab" ? (
+                    <Gitlab size={20} />
                   ) : (
                     <GitBranch size={20} />
                   )
@@ -1501,7 +1558,7 @@ function ResourcePage({
               <div className="resource-info">
                 <div className="resource-title">
                   <h3>{item.name}</h3>
-                  <span className="kind-badge">{item.kind}</span>
+                  <span className="kind-badge">{(isConn && codeHosts[item.kind]?.label) || item.kind}</span>
                 </div>
                 <p>{isNotif ? (item.has_url ? "Webhook URL securely saved" : "No webhook URL saved") : item.base_url || "Default endpoint"}</p>
                 <div className="resource-details">
@@ -1868,6 +1925,7 @@ function ResourceForm({
   const isConn = kind === "connection";
   const isNotif = kind === "notification";
   const [v, setV] = useState<Obj>({ ...item });
+  const host = codeHosts[v.kind] || codeHosts.github;
   const [err, setErr] = useState("");
   const [show, setShow] = useState(false);
   const change = (k: string, val: any) =>
@@ -1875,8 +1933,7 @@ function ResourceForm({
   const choose = (k: string) => {
     change("kind", k);
     if (isNotif) return;
-    if (isConn)
-      change("base_url", k === "github" ? "https://api.github.com" : "");
+    if (isConn) change("base_url", codeHosts[k]?.base || "");
     else
       change(
         "base_url",
@@ -1915,15 +1972,13 @@ function ResourceForm({
           Type
           <select value={v.kind} onChange={(e) => choose(e.target.value)}>
             {(isConn
-              ? ["github", "forgejo"]
+              ? Object.keys(codeHosts)
               : isNotif ? ["discord", "slack", "teams", "webhook"] : ["openai", "ollama", "anthropic"]
             ).map((x) => (
               <option key={x} value={x}>
-                {x === "github"
-                  ? "GitHub"
-                  : x === "forgejo"
-                    ? "Forgejo"
-                    : x === "openai"
+                {isConn
+                  ? codeHosts[x].label
+                  : x === "openai"
                       ? "OpenAI"
                       : x === "ollama"
                       ? "Ollama"
@@ -1962,22 +2017,18 @@ function ResourceForm({
       ) : (
       <>
       <label>
-        {isConn
-          ? v.kind === "github"
-            ? "API base URL"
-            : "Forgejo instance URL"
-          : "API base URL"}
+        {isConn ? host.baseLabel : "API base URL"}
         <input
           value={v.base_url || ""}
           onChange={(e) => change("base_url", e.target.value)}
           placeholder={
-            isConn ? "https://api.github.com" : "https://api.openai.com/v1"
+            isConn ? host.base || "https://git.example.com" : "https://api.openai.com/v1"
           }
           required
         />
         <small>
           {isConn
-            ? "For Forgejo, use the instance root."
+            ? host.baseHint
             : "Use a reachable URL from the Diffrook server."}
         </small>
       </label>
@@ -2005,6 +2056,7 @@ function ResourceForm({
             {show ? <EyeOff size={16} /> : <Eye size={16} />}
           </button>
         </div>
+        {isConn && <small>{host.token}</small>}
       </label>
       {isConn ? (
         <>
@@ -2021,9 +2073,7 @@ function ResourceForm({
               }
               autoComplete="new-password"
             />
-            <small>
-              Configure the same secret in your GitHub or Forgejo webhook.
-            </small>
+            <small>{host.secret}</small>
           </label>
           <label>
             Bot username{" "}
@@ -2187,7 +2237,7 @@ function AutomationForm({
       setErr("Choose a connection and an AI provider.");
       return;
     }
-    if (v.repositories.some((r: string) => !/^[-\w.]+\/[-\w.]+$/.test(r))) {
+    if (v.repositories.some((r: string) => !/^~?[-\w.]+(\/[-\w.]+)+$/.test(r))) {
       setErr("Repositories must use owner/repo format.");
       return;
     }
@@ -2320,7 +2370,9 @@ function AutomationForm({
             <div>
               <h3>Repository targets</h3>
               <p>
-                Use one <code>owner/repo</code> per line.
+                Use one <code>owner/repo</code> per line. GitLab subgroups use{" "}
+                <code>group/subgroup/repo</code>; Bitbucket Data Center uses{" "}
+                <code>PROJECT/repo</code>.
               </p>
             </div>
           </div>

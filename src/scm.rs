@@ -60,9 +60,78 @@ pub struct FileChange {
     pub content: String,
 }
 
+pub mod bitbucket;
+pub mod gitlab;
+
+/// Code hosts a connection can point at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    GitHub,
+    GitLab,
+    BitbucketCloud,
+    BitbucketDataCenter,
+    Forgejo,
+    Gitea,
+}
+
+impl Kind {
+    pub const ALL: [Kind; 6] = [
+        Kind::GitHub,
+        Kind::GitLab,
+        Kind::BitbucketCloud,
+        Kind::BitbucketDataCenter,
+        Kind::Forgejo,
+        Kind::Gitea,
+    ];
+    pub fn parse(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|k| k.id() == s)
+    }
+    pub fn id(self) -> &'static str {
+        match self {
+            Kind::GitHub => "github",
+            Kind::GitLab => "gitlab",
+            Kind::BitbucketCloud => "bitbucket",
+            Kind::BitbucketDataCenter => "bitbucket_datacenter",
+            Kind::Forgejo => "forgejo",
+            Kind::Gitea => "gitea",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Kind::GitHub => "GitHub",
+            Kind::GitLab => "GitLab",
+            Kind::BitbucketCloud => "Bitbucket Cloud",
+            Kind::BitbucketDataCenter => "Bitbucket Data Center",
+            Kind::Forgejo => "Forgejo",
+            Kind::Gitea => "Gitea",
+        }
+    }
+    /// Public SaaS endpoint used when a connection leaves base_url empty.
+    pub fn default_base(self) -> Option<&'static str> {
+        match self {
+            Kind::GitHub => Some("https://api.github.com"),
+            Kind::GitLab => Some("https://gitlab.com"),
+            Kind::BitbucketCloud => Some("https://api.bitbucket.org"),
+            _ => None,
+        }
+    }
+    /// Forgejo is a Gitea fork and both expose the same /api/v1 surface.
+    fn gitea_like(self) -> bool {
+        matches!(self, Kind::Forgejo | Kind::Gitea)
+    }
+    /// GitLab projects may live in nested groups; other hosts are owner/name.
+    pub fn max_repository_segments(self) -> usize {
+        if self == Kind::GitLab {
+            20
+        } else {
+            2
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Scm {
-    kind: String,
+    kind: Kind,
     base: String,
     token: String,
     client: reqwest::Client,
@@ -70,27 +139,23 @@ pub struct Scm {
 
 impl Scm {
     pub fn from_connection(c: &Value, client: &reqwest::Client) -> Result<Self> {
-        let kind = required(c, "kind")?.to_owned();
-        if kind != "github" && kind != "forgejo" {
-            bail!("unsupported connection kind: {kind}");
-        }
+        let kind_id = required(c, "kind")?;
+        let kind = Kind::parse(kind_id)
+            .ok_or_else(|| anyhow!("unsupported connection kind: {kind_id}"))?;
         let base = c
             .get("base_url")
             .and_then(Value::as_str)
             .filter(|x| !x.is_empty())
-            .unwrap_or(if kind == "github" {
-                "https://api.github.com"
-            } else {
-                ""
-            });
-        if base.is_empty() {
-            bail!("Forgejo connection is missing base_url");
-        }
+            .or(kind.default_base())
+            .ok_or_else(|| anyhow!("{} connection is missing base_url", kind.label()))?
+            .trim_end_matches('/');
         let token = required(c, "token")?.to_owned();
-        let base = if kind == "forgejo" {
-            format!("{}/api/v1", base.trim_end_matches('/'))
-        } else {
-            base.trim_end_matches('/').to_owned()
+        let base = match kind {
+            Kind::GitHub => base.to_owned(),
+            Kind::GitLab => format!("{}/api/v4", base.trim_end_matches("/api/v4")),
+            Kind::BitbucketCloud => format!("{}/2.0", base.trim_end_matches("/2.0")),
+            Kind::BitbucketDataCenter => format!("{base}/rest/api/latest"),
+            Kind::Forgejo | Kind::Gitea => format!("{base}/api/v1"),
         };
         Ok(Self {
             kind,
@@ -99,28 +164,96 @@ impl Scm {
             client: client.clone(),
         })
     }
+    pub fn kind(&self) -> Kind {
+        self.kind
+    }
     fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
     fn request(&self, method: reqwest::Method, path: &str) -> reqwest::RequestBuilder {
-        let mut request = self
-            .client
-            .request(method, self.url(path))
-            .bearer_auth(&self.token)
-            .header(
-                reqwest::header::ACCEPT,
-                if self.kind == "github" {
-                    "application/vnd.github+json"
-                } else {
-                    "application/json"
-                },
-            );
-        if self.kind == "github" {
-            request = request
+        self.authorize(self.client.request(method, self.url(path)))
+    }
+    fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        let request = match self.kind {
+            Kind::GitLab => request.header("private-token", &self.token),
+            // Bitbucket Cloud API tokens and app passwords use Basic auth as
+            // "user:secret"; workspace and repository access tokens are Bearer.
+            Kind::BitbucketCloud if self.token.contains(':') => {
+                let (user, secret) = self.token.split_once(':').unwrap_or_default();
+                request.basic_auth(user, Some(secret))
+            }
+            _ => request.bearer_auth(&self.token),
+        };
+        if self.kind == Kind::GitHub {
+            request
+                .header(reqwest::header::ACCEPT, "application/vnd.github+json")
                 .header("x-github-api-version", "2022-11-28")
-                .header("user-agent", "Diffrook");
+                .header("user-agent", "Diffrook")
+        } else {
+            request.header(reqwest::header::ACCEPT, "application/json")
         }
-        request
+    }
+    async fn send(&self, request: reqwest::RequestBuilder, what: &str) -> Result<Value> {
+        self.json(request.send().await.with_context(|| what.to_owned())?)
+            .await
+    }
+    async fn get_with_headers(&self, path: &str) -> Result<(Value, reqwest::header::HeaderMap)> {
+        let response = self
+            .request(reqwest::Method::GET, path)
+            .send()
+            .await
+            .context("SCM GET failed")?;
+        let headers = response.headers().clone();
+        Ok((self.json(response).await?, headers))
+    }
+    /// Only follow absolute links (pagination, redirects) that stay inside the
+    /// configured API, so the token is never sent to another origin.
+    fn checked_absolute(&self, url: &str) -> Result<String> {
+        if url.starts_with(&format!("{}/", self.base)) {
+            Ok(url.to_owned())
+        } else {
+            bail!("SCM link points outside the configured API")
+        }
+    }
+    async fn get_absolute(&self, url: &str) -> Result<Value> {
+        let url = self.checked_absolute(url)?;
+        self.json(
+            self.authorize(self.client.get(url))
+                .send()
+                .await
+                .context("SCM GET failed")?,
+        )
+        .await
+    }
+    /// Fetch a non-JSON body (raw files and diffs), bounded like JSON responses.
+    /// The shared client never follows redirects; a few same-API hops are
+    /// allowed here because Bitbucket redirects diff requests.
+    async fn get_text(&self, path: &str, limit: usize) -> Result<String> {
+        let mut url = self.url(path);
+        for _ in 0..3 {
+            let response = self
+                .authorize(self.client.get(&url))
+                .header(reqwest::header::ACCEPT, "*/*")
+                .send()
+                .await
+                .context("SCM GET failed")?;
+            let status = response.status();
+            if status.is_redirection() {
+                let location = response
+                    .headers()
+                    .get(reqwest::header::LOCATION)
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| anyhow!("SCM redirect has no location"))?;
+                url = self.checked_absolute(reqwest::Url::parse(&url)?.join(location)?.as_str())?;
+                continue;
+            }
+            if !status.is_success() {
+                bail!("SCM returned HTTP {status}");
+            }
+            return String::from_utf8(crate::network::read_body(response, limit).await?)
+                .map_err(|_| anyhow!("SCM response is not UTF-8"));
+        }
+        bail!("SCM redirected too many times")
     }
     async fn get(&self, path: &str) -> Result<Value> {
         self.json(
@@ -140,6 +273,13 @@ impl Scm {
         serde_json::from_slice(&body).context("SCM returned invalid JSON")
     }
     pub async fn repository(&self, repo: &str) -> Result<Repository> {
+        match self.kind {
+            Kind::GitLab => return gitlab::repository(self, repo).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::repository(self, repo).await
+            }
+            _ => {}
+        }
         let value = self.get(&format!("/repos/{}", repo_path(repo)?)).await?;
         Ok(Repository {
             full_name: value
@@ -161,22 +301,19 @@ impl Scm {
         })
     }
     pub async fn tree(&self, repo: &str, branch: &str) -> Result<Vec<TreeEntry>> {
-        let branch_data = self
-            .get(&format!(
-                "/repos/{}/branches/{}",
-                repo_path(repo)?,
-                branch_path(branch)?
-            ))
-            .await?;
-        let sha = branch_data
-            .pointer("/commit/sha")
-            .and_then(Value::as_str)
-            .ok_or_else(|| anyhow!("branch response has no commit sha"))?;
-        self.tree_at(repo, sha).await
+        let sha = self.branch_sha(repo, branch).await?;
+        self.tree_at(repo, &sha).await
     }
     pub async fn tree_at(&self, repo: &str, sha: &str) -> Result<Vec<TreeEntry>> {
+        match self.kind {
+            Kind::GitLab => return gitlab::tree_at(self, repo, sha).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::tree_at(self, repo, sha).await
+            }
+            _ => {}
+        }
         let mut entries = Vec::new();
-        if self.kind == "forgejo" {
+        if self.kind.gitea_like() {
             for page in 1..=1000 {
                 let data = self
                     .get(&format!(
@@ -226,6 +363,13 @@ impl Scm {
     }
     pub async fn file(&self, repo: &str, path: &str, reference: &str) -> Result<FileContent> {
         validate_path(path)?;
+        match self.kind {
+            Kind::GitLab => return gitlab::file(self, repo, path, reference).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::file(self, repo, path, reference).await
+            }
+            _ => {}
+        }
         let reference =
             url::form_urlencoded::byte_serialize(reference.as_bytes()).collect::<String>();
         let data = self
@@ -262,10 +406,17 @@ impl Scm {
         })
     }
     pub async fn pull_request(&self, repo: &str, number: u64) -> Result<PullRequest> {
+        match self.kind {
+            Kind::GitLab => return gitlab::pull_request(self, repo, number).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::pull_request(self, repo, number).await
+            }
+            _ => {}
+        }
         let data = self
             .get(&format!("/repos/{}/pulls/{number}", repo_path(repo)?))
             .await?;
-        let diff_request = if self.kind == "forgejo" {
+        let diff_request = if self.kind.gitea_like() {
             self.request(
                 reqwest::Method::GET,
                 &format!("/repos/{}/pulls/{number}.diff", repo_path(repo)?),
@@ -328,6 +479,13 @@ impl Scm {
         })
     }
     pub async fn issue(&self, repo: &str, number: u64) -> Result<Issue> {
+        match self.kind {
+            Kind::GitLab => return gitlab::issue(self, repo, number).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::issue(self, repo, number).await
+            }
+            _ => {}
+        }
         let data = self
             .get(&format!("/repos/{}/issues/{number}", repo_path(repo)?))
             .await?;
@@ -376,16 +534,31 @@ impl Scm {
             html_url: str_at(&data, "html_url"),
         })
     }
+    /// Open pull requests in GitHub's shape (number, user.login, draft,
+    /// labels[].name, head.ref), whichever host the connection uses.
     pub async fn open_pull_requests(&self, repo: &str) -> Result<Vec<Value>> {
-        self.list_open(repo, "pulls", false).await
+        match self.kind {
+            Kind::GitLab => gitlab::open_items(self, repo, true).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                bitbucket::open_pull_requests(self, repo).await
+            }
+            _ => self.list_open(repo, "pulls", false).await,
+        }
     }
+    /// Open issues in the same shape as [`Scm::open_pull_requests`].
     pub async fn open_issues(&self, repo: &str) -> Result<Vec<Value>> {
-        self.list_open(repo, "issues", true).await
+        match self.kind {
+            Kind::GitLab => gitlab::open_items(self, repo, false).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                bitbucket::open_issues(self, repo).await
+            }
+            _ => self.list_open(repo, "issues", true).await,
+        }
     }
     async fn list_open(&self, repo: &str, kind: &str, filter_prs: bool) -> Result<Vec<Value>> {
         let mut result = Vec::new();
         for page in 1..=1000 {
-            let endpoint = if self.kind == "github" {
+            let endpoint = if self.kind == Kind::GitHub {
                 format!(
                     "/repos/{}/{}?state=open&per_page=100&page={page}",
                     repo_path(repo)?,
@@ -409,7 +582,7 @@ impl Scm {
                 }
                 result.push(row.clone());
             }
-            let page_size = if self.kind == "github" { 100 } else { 50 };
+            let page_size = if self.kind == Kind::GitHub { 100 } else { 50 };
             if page_len < page_size {
                 break;
             }
@@ -419,7 +592,24 @@ impl Scm {
         }
         Ok(result)
     }
-    pub async fn post_comment(&self, repo: &str, number: u64, body: &str) -> Result<()> {
+    /// Comment on a pull request (merge request) or an issue. GitHub-style
+    /// hosts share one endpoint; GitLab and Bitbucket need to know which.
+    pub async fn post_comment(
+        &self,
+        repo: &str,
+        is_pull_request: bool,
+        number: u64,
+        body: &str,
+    ) -> Result<()> {
+        match self.kind {
+            Kind::GitLab => {
+                return gitlab::post_comment(self, repo, is_pull_request, number, body).await
+            }
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::post_comment(self, repo, is_pull_request, number, body).await
+            }
+            _ => {}
+        }
         self.json(
             self.request(
                 reqwest::Method::POST,
@@ -434,22 +624,7 @@ impl Scm {
         Ok(())
     }
     pub async fn create_branch(&self, repo: &str, name: &str, from_sha: &str) -> Result<()> {
-        if self.kind == "forgejo" {
-            return self
-                .json(
-                    self.request(
-                        reqwest::Method::POST,
-                        &format!("/repos/{}/branches", repo_path(repo)?),
-                    )
-                    .json(&json!({"new_branch_name":name,"old_ref_name":from_sha}))
-                    .send()
-                    .await
-                    .context("creating Forgejo branch")?,
-                )
-                .await
-                .map(|_| ());
-        }
-        self.create_github_branch(repo, name, from_sha).await
+        self.create_branch_from_ref(repo, name, from_sha).await
     }
     async fn create_github_branch(&self, repo: &str, name: &str, sha: &str) -> Result<()> {
         self.json(
@@ -471,7 +646,7 @@ impl Scm {
         name: &str,
         old_ref: &str,
     ) -> Result<()> {
-        if self.kind == "forgejo" {
+        if self.kind.gitea_like() {
             self.json(
                 self.request(
                     reqwest::Method::POST,
@@ -485,15 +660,28 @@ impl Scm {
             .await?;
             Ok(())
         } else {
-            let sha = if old_ref.len() == 40 && old_ref.bytes().all(|b| b.is_ascii_hexdigit()) {
+            let sha = if is_full_sha(old_ref) {
                 old_ref.to_owned()
             } else {
                 self.branch_sha(repo, old_ref).await?
             };
-            self.create_github_branch(repo, name, &sha).await
+            match self.kind {
+                Kind::GitLab => gitlab::create_branch(self, repo, name, &sha).await,
+                Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                    bitbucket::create_branch(self, repo, name, &sha).await
+                }
+                _ => self.create_github_branch(repo, name, &sha).await,
+            }
         }
     }
     pub async fn branch_sha(&self, repo: &str, name: &str) -> Result<String> {
+        match self.kind {
+            Kind::GitLab => return gitlab::branch_sha(self, repo, name).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::branch_sha(self, repo, name).await
+            }
+            _ => {}
+        }
         let v = self
             .get(&format!(
                 "/repos/{}/branches/{}",
@@ -522,7 +710,22 @@ impl Scm {
             bail!("branch changed before commit; refusing stale changes")
         }
         let entries = self.tree_at(repo, &base).await?;
-        if self.kind == "forgejo" {
+        match self.kind {
+            Kind::GitLab => {
+                return gitlab::commit_changes(
+                    self, repo, branch, &base, &entries, changes, message,
+                )
+                .await
+            }
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::commit_changes(
+                    self, repo, branch, &base, &entries, changes, message,
+                )
+                .await
+            }
+            _ => {}
+        }
+        if self.kind.gitea_like() {
             let mut seen = std::collections::HashSet::new();
             let mut files = Vec::new();
             for ch in changes {
@@ -643,6 +846,16 @@ impl Scm {
         head: &str,
         base: &str,
     ) -> Result<Value> {
+        // Every host returns {"number","html_url"} so callers stay host-agnostic.
+        match self.kind {
+            Kind::GitLab => {
+                return gitlab::create_pull_request(self, repo, title, body, head, base).await
+            }
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                return bitbucket::create_pull_request(self, repo, title, body, head, base).await
+            }
+            _ => {}
+        }
         self.json(
             self.request(
                 reqwest::Method::POST,
@@ -655,10 +868,44 @@ impl Scm {
         )
         .await
     }
+    /// Validate a change set against the base tree. Returns each change with
+    /// the entry it replaces, or None when the file is new.
+    fn checked_changes<'a>(
+        entries: &'a [TreeEntry],
+        changes: &'a [FileChange],
+    ) -> Result<Vec<(&'a FileChange, Option<&'a TreeEntry>)>> {
+        let mut seen = std::collections::HashSet::new();
+        let mut checked = Vec::new();
+        for ch in changes {
+            validate_path(&ch.path)?;
+            if !seen.insert(ch.path.as_str()) {
+                bail!("duplicate changed path {}", ch.path)
+            }
+            let current = entries.iter().find(|e| e.path == ch.path);
+            if current.is_some_and(|e| !["100644", "100755"].contains(&e.mode.as_str())) {
+                bail!("cannot modify symlink or submodule {}", ch.path)
+            }
+            checked.push((ch, current));
+        }
+        Ok(checked)
+    }
 }
 
 pub async fn test_connection(connection: &Value, client: &reqwest::Client) -> Result<String> {
     let scm = Scm::from_connection(connection, client)?;
+    match scm.kind {
+        Kind::GitLab => {
+            return gitlab::identity(&scm)
+                .await
+                .map(|u| format!("Connected as {u}"))
+        }
+        Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+            return bitbucket::identity(&scm)
+                .await
+                .map(|u| format!("Connected as {u}"))
+        }
+        _ => {}
+    }
     let response = scm
         .request(reqwest::Method::GET, "/user")
         .send()
@@ -694,6 +941,110 @@ pub fn validate_path(path: &str) -> Result<()> {
         bail!("unsafe repository path");
     }
     Ok(())
+}
+/// Percent-encode a whole value, including '/', for APIs that take a path or
+/// branch name as a single URL segment or query parameter.
+fn escape_all(s: &str) -> String {
+    url::form_urlencoded::byte_serialize(s.as_bytes())
+        .collect::<String>()
+        .replace('+', "%20")
+}
+fn decode_utf8_base64(encoded: &str) -> Result<String> {
+    let decoded = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        encoded.replace('\n', ""),
+    )
+    .context("decoding repository file")?;
+    String::from_utf8(decoded).map_err(|_| anyhow!("repository file is not UTF-8"))
+}
+/// Scripted HTTP server for provider tests: answers each request in order and
+/// returns what it received.
+#[cfg(test)]
+pub(crate) mod test_server {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    pub struct Reply {
+        pub status: &'static str,
+        pub headers: Vec<(&'static str, String)>,
+        pub body: String,
+    }
+    pub fn ok(body: &str) -> Reply {
+        Reply {
+            status: "200 OK",
+            headers: vec![],
+            body: body.into(),
+        }
+    }
+    #[derive(Debug)]
+    pub struct Seen {
+        pub method: String,
+        pub path: String,
+        pub headers: String,
+        pub body: String,
+    }
+    pub async fn serve(replies: Vec<Reply>) -> (String, tokio::task::JoinHandle<Vec<Seen>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let base = origin.clone();
+        let handle = tokio::spawn(async move {
+            let origin = base;
+            let mut seen = Vec::new();
+            for reply in replies {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut bytes = Vec::new();
+                let mut buf = [0u8; 8192];
+                let end = loop {
+                    let n = stream.read(&mut buf).await.unwrap();
+                    bytes.extend_from_slice(&buf[..n]);
+                    if let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                        let length = head
+                            .lines()
+                            .find_map(|l| l.strip_prefix("content-length: ")?.parse().ok())
+                            .unwrap_or(0usize);
+                        if bytes.len() >= end + 4 + length {
+                            break end;
+                        }
+                    }
+                    assert!(n > 0, "client closed before sending a full request");
+                };
+                let head = String::from_utf8_lossy(&bytes[..end]).to_string();
+                let mut first = head.lines().next().unwrap().split_whitespace();
+                seen.push(Seen {
+                    method: first.next().unwrap().into(),
+                    path: first.next().unwrap().into(),
+                    headers: head.to_ascii_lowercase(),
+                    body: String::from_utf8_lossy(&bytes[end + 4..]).into(),
+                });
+                // Replies may mention {origin} because the port is only known here.
+                let extra: String = reply
+                    .headers
+                    .iter()
+                    .map(|(k, v)| format!("{k}: {}\r\n", v.replace("{origin}", &origin)))
+                    .collect();
+                let body = reply.body.replace("{origin}", &origin);
+                let wire = format!(
+                    "HTTP/1.1 {}\r\nContent-Type: application/json\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    reply.status,
+                    body.len(),
+                );
+                stream.write_all(wire.as_bytes()).await.unwrap();
+            }
+            seen
+        });
+        (origin, handle)
+    }
+    pub fn client() -> reqwest::Client {
+        reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+}
+fn is_full_sha(s: &str) -> bool {
+    s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 fn required<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v.get(k)

@@ -1,6 +1,6 @@
 # Diffrook
 
-Self-hosted code review and repository automations for GitHub and Forgejo. Choose when an automation runs, which model it uses, whether it reviews or writes a fix, and where it posts the result.
+Self-hosted code review and repository automations for GitHub, GitLab, Bitbucket (Cloud and Data Center), Forgejo and Gitea. Choose when an automation runs, which model it uses, whether it reviews or writes a fix, and where it posts the result.
 
 Diffrook uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
 
@@ -29,12 +29,27 @@ For company SSO and Internet access, see [SSO and HTTPS deployment](docs/sso-and
 Each installation configures its own hostname and OpenID Connect provider, with an
 explicit administrator allowlist. SSO defaults to disabling password login.
 
-1. Create a GitHub or Forgejo connection with a bot account token and webhook secret.
+1. Create a code host connection with a bot account token and webhook secret. See [code hosts](#code-hosts).
 2. Create an AI provider and test the connection.
 3. Add reusable destinations in **Notifications**. Discord, Slack, Teams and generic webhook URLs are encrypted at rest and can be test-sent from this page.
 4. Create an automation. Select repositories, model, trigger, filters, action, limits and notification destinations.
-5. Configure a webhook in the repository, or use scheduled and manual runs.
+5. Configure a webhook in the repository that posts to `https://YOUR-HOST/api/webhooks/CONNECTION_ID`, or use scheduled and manual runs.
 6. Inspect each run in the web interface. Findings include the location, explanation, severity and suggested correction.
+
+### Code hosts
+
+| Type | URL | Token | Repository format | Webhook |
+| --- | --- | --- | --- | --- |
+| GitHub | `https://api.github.com`, or `https://HOST/api/v3` for Enterprise Server | Personal access token | `owner/repo` | Content type `application/json`, secret set. Events: pull requests, issues, issue comments |
+| GitLab | `https://gitlab.com` or the self-managed root | Personal, project or group token with `api` scope | `group/repo` or `group/subgroup/repo` | Secret token set. Triggers: merge request, issue and comment events |
+| Bitbucket Cloud | `https://api.bitbucket.org` | Workspace or repository access token, or `email:API token` | `workspace/repo` | Secret set. Triggers: pull request created, updated and comment created; issue created, updated and comment created |
+| Bitbucket Data Center | Instance root | HTTP access token with repository write | `PROJECT/repo` or `~user/repo` | Secret set. Events: pull request opened, source branch updated and comment added |
+| Forgejo | Instance root | Access token with repository and issue scopes | `owner/repo` | Forgejo webhook, content type `application/json`, secret set |
+| Gitea | Instance root | Access token with repository and issue scopes | `owner/repo` | Gitea webhook, content type `application/json`, secret set |
+
+GitLab merge requests and Bitbucket pull requests are handled as pull requests. Bitbucket Data Center has no issue tracker, so issue automations are not available there. Bitbucket Cloud issues have no labels; their kind and component are used as labels for filters. Bitbucket sends one event for both new commits and pull request edits, so a review can also run after an edit.
+
+Comment commands (`/diffrook`) need an allowed-actors list on every host except GitHub, because only GitHub reports whether the commenter is a repository member.
 
 Typical automations include reviewing a newly opened PR, auditing a branch every Monday at 09:00 in a selected timezone, and creating a fix PR for an issue carrying a selected label.
 
@@ -86,7 +101,7 @@ See [the architecture](docs/architecture.md) and [the implementation contract](I
 
 ## Project status
 
-This is the first implementation. GitHub and Forgejo are the initial platforms. Additional repository platforms and an isolated command runner can be added through the existing boundaries.
+This is the first implementation. GitHub, GitLab, Bitbucket Cloud, Bitbucket Data Center, Forgejo and Gitea are supported. An isolated command runner can be added through the existing boundaries.
 
 ## License
 

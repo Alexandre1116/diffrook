@@ -450,3 +450,75 @@ async fn full_run_queue_rejects_webhooks_without_marking_them_received() {
         .unwrap();
     assert_eq!(runs, 1000);
 }
+
+#[tokio::test]
+async fn gitlab_webhook_requires_the_shared_token_and_queues_nested_group_projects() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::with_security(dir.path(), SecurityConfig::default())
+        .await
+        .unwrap();
+    webhook_fixture(&state).await;
+    for (kind, id) in [
+        ("connections", "connection"),
+        ("automations", "a1"),
+        ("automations", "a2"),
+    ] {
+        let mut object = diffrook::db::object(&state.db, kind, id)
+            .await
+            .unwrap()
+            .unwrap();
+        if kind == "connections" {
+            state.reveal(kind, &mut object).unwrap();
+            object["kind"] = json!("gitlab");
+            state.protect(kind, &mut object).unwrap();
+        } else {
+            object["repositories"] = json!(["acme/platform/demo"]);
+        }
+        diffrook::db::save_object(&state.db, kind, &object)
+            .await
+            .unwrap();
+    }
+    let app = diffrook::routes::router(state.clone());
+    let body = json!({"object_kind":"merge_request","user":{"username":"developer"},
+        "project":{"path_with_namespace":"acme/platform/demo"},
+        "object_attributes":{"action":"open","iid":3,"source_branch":"feature"}})
+    .to_string();
+    let send = |token: &'static str, delivery: &'static str| {
+        let app = app.clone();
+        let body = body.clone();
+        async move {
+            let response = app
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri("/api/webhooks/connection")
+                        .header("x-gitlab-event", "Merge Request Hook")
+                        .header("x-gitlab-token", token)
+                        .header("idempotency-key", delivery)
+                        .body(Body::from(body))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let status = response.status();
+            let body: Value =
+                serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
+                    .unwrap();
+            (status, body)
+        }
+    };
+    let (status, _) = send("wrong-token", "gl-1").await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let (status, body) = send("mock-webhook-secret", "gl-1").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["queued"], 2);
+    let (_, body) = send("mock-webhook-secret", "gl-1").await;
+    assert_eq!(body["duplicate"], true);
+    let trigger: String = sqlx::query_scalar("SELECT body FROM runs LIMIT 1")
+        .fetch_one(&state.db)
+        .await
+        .unwrap();
+    let trigger: Value = serde_json::from_str(&trigger).unwrap();
+    assert_eq!(trigger["trigger"]["number"], 3);
+    assert_eq!(trigger["trigger"]["branch"], "feature");
+}

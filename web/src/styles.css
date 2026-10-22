@@ -1134,7 +1134,11 @@ button:disabled {
   display: grid;
   place-items: center;
 }
-.resource-logo.forgejo {
+.resource-logo.forgejo,
+.resource-logo.gitea,
+.resource-logo.gitlab,
+.resource-logo.bitbucket,
+.resource-logo.bitbucket_datacenter {
   color: #6788cf;
   background: #f3f4f7;
 }

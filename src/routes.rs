@@ -10,7 +10,6 @@ use axum::{
     routing::{get, post, put},
     Json, Router,
 };
-use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Sha256;
@@ -220,15 +219,14 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
     let strf = |k: &str| v[k].as_str().unwrap_or("");
     match kind {
         "connections" => {
-            if strf("name").trim().is_empty() || !["github", "forgejo"].contains(&strf("kind")) {
+            let Some(scm_kind) = crate::scm::Kind::parse(strf("kind")) else {
+                return Err("Connection name and supported kind are required".into());
+            };
+            if strf("name").trim().is_empty() {
                 return Err("Connection name and supported kind are required".into());
             }
             let base = if strf("base_url").is_empty() {
-                if strf("kind") == "github" {
-                    "https://api.github.com"
-                } else {
-                    ""
-                }
+                scm_kind.default_base().unwrap_or("")
             } else {
                 strf("base_url")
             };
@@ -243,7 +241,7 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                     );
                 }
             } else {
-                return Err("Forgejo instance URL is required".into());
+                return Err(format!("{} instance URL is required", scm_kind.label()));
             }
         }
         "providers" => {
@@ -363,11 +361,14 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 let Some(r) = r.as_str() else {
                     return Err("Repository entries must be strings".into());
                 };
+                // owner/name everywhere; GitLab also allows nested groups. The
+                // connection's own limit is enforced when the repository is used.
                 let parts: Vec<_> = r.split('/').collect();
-                if parts.len() != 2
-                    || parts
-                        .iter()
-                        .any(|p| p.is_empty() || p.contains([' ', ':', '\\']))
+                if parts.len() < 2
+                    || parts.len() > crate::scm::Kind::GitLab.max_repository_segments()
+                    || parts.iter().any(|p| {
+                        p.is_empty() || *p == "." || *p == ".." || p.contains([' ', ':', '\\'])
+                    })
                 {
                     return Err(format!("Invalid repository: {r}"));
                 }
@@ -1355,42 +1356,16 @@ async fn webhook(
         Ok(None) => return error(StatusCode::NOT_FOUND, "Connection not found"),
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
-    let forgejo = c["kind"].as_str() == Some("forgejo");
-    let signature = headers
-        .get(if forgejo {
-            "x-forgejo-signature"
-        } else {
-            "x-hub-signature-256"
-        })
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let delivery = headers
-        .get(if forgejo {
-            "x-forgejo-delivery"
-        } else {
-            "x-github-delivery"
-        })
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let event = headers
-        .get(if forgejo {
-            "x-forgejo-event"
-        } else {
-            "x-github-event"
-        })
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    if signature.is_empty()
-        || delivery.is_empty()
-        || event.is_empty()
-        || delivery.len() > 256
-        || event.len() > 128
-    {
+    let Some(kind) = c["kind"].as_str().and_then(crate::scm::Kind::parse) else {
+        return error(StatusCode::BAD_REQUEST, "Unsupported connection kind");
+    };
+    let Some(d) = crate::webhooks::delivery(kind, &headers) else {
         return error(
             StatusCode::UNAUTHORIZED,
             "Missing signature or delivery headers",
         );
-    }
+    };
+    let (delivery, event) = (d.id, d.event);
     if let Err(e) = s.reveal("connections", &mut c) {
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
@@ -1398,18 +1373,7 @@ async fn webhook(
     if secret.is_empty() {
         return error(StatusCode::UNAUTHORIZED, "Webhook secret is not configured");
     }
-    let mut mac = match Hmac::<Sha256>::new_from_slice(secret.as_bytes()) {
-        Ok(x) => x,
-        Err(_) => return error(StatusCode::INTERNAL_SERVER_ERROR, "Invalid webhook key"),
-    };
-    mac.update(&body);
-    let digest = hex::encode(mac.finalize().into_bytes());
-    let expected = if forgejo {
-        digest
-    } else {
-        format!("sha256={digest}")
-    };
-    if !constant_time_eq(signature.as_bytes(), expected.as_bytes()) {
+    if !crate::webhooks::verify(kind, d.signature, &body, secret) {
         return error(StatusCode::UNAUTHORIZED, "Invalid webhook signature");
     }
     let payload: Value = match serde_json::from_slice(&body) {
@@ -1428,18 +1392,14 @@ async fn webhook(
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
         _ => (),
     }
-    let action = event_action(event, &payload);
-    let Some((repo, kind, number, branch, actor)) = webhook_target(&payload, event) else {
+    let Some(ev) = crate::webhooks::parse(kind, event, &payload) else {
         return Json(json!({"ok":true,"queued":0})).into_response();
     };
-    let sender = payload["sender"]["login"]
-        .as_str()
-        .or_else(|| payload["sender"]["username"].as_str())
-        .unwrap_or("");
-    if sender.eq_ignore_ascii_case(c["bot_username"].as_str().unwrap_or("")) {
+    let (action, repo, actor) = (ev.action, ev.repo.as_str(), ev.actor.as_str());
+    let bot = c["bot_username"].as_str().unwrap_or("");
+    if !bot.is_empty() && actor.eq_ignore_ascii_case(bot) {
         return Json(json!({"ok":true,"queued":0,"ignored":"bot event"})).into_response();
     }
-    let command = payload["comment"]["body"].as_str().unwrap_or("");
     let autos = match db::objects(&s.db, "automations").await {
         Ok(x) => x,
         Err(e) => return error(StatusCode::INTERNAL_SERVER_ERROR, e),
@@ -1450,7 +1410,7 @@ async fn webhook(
             || a["connection_id"].as_str() != Some(&connection_id)
             || !a["repositories"]
                 .as_array()
-                .is_some_and(|rs| rs.iter().any(|r| r.as_str() == Some(&repo)))
+                .is_some_and(|rs| rs.iter().any(|r| r.as_str() == Some(repo)))
         {
             continue;
         }
@@ -1461,32 +1421,28 @@ async fn webhook(
         if !events.iter().any(|e| e.as_str() == Some(action)) {
             continue;
         }
-        if (a["action"] == "solve_issue" && kind != "issue")
-            || (a["action"] == "fix_pr" && kind != "pull_request")
+        if (a["action"] == "solve_issue" && ev.kind != "issue")
+            || (a["action"] == "fix_pr" && ev.kind != "pull_request")
         {
             continue;
         }
         if action == "issue_comment.command"
             && !matches_command(
-                command,
+                &ev.command,
                 a["trigger"]["command"].as_str().unwrap_or("/diffrook"),
             )
         {
             continue;
         }
         let filters = &a["filters"];
-        if filters["ignore_drafts"] == true && payload["pull_request"]["draft"] == true {
+        if filters["ignore_drafts"] == true && ev.draft {
             continue;
         }
         let allowed = filters["allowed_actors"]
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let auth_actor = if action == "issue_comment.command" {
-            sender
-        } else {
-            actor.as_str()
-        };
+        let auth_actor = actor;
         if !allowed.is_empty()
             && !allowed.iter().any(|x| {
                 x.as_str()
@@ -1495,17 +1451,7 @@ async fn webhook(
         {
             continue;
         }
-        if action == "issue_comment.command"
-            && allowed.is_empty()
-            && !matches!(
-                payload["comment"]["author_association"].as_str().unwrap_or(
-                    payload["sender"]["author_association"]
-                        .as_str()
-                        .unwrap_or("")
-                ),
-                "OWNER" | "MEMBER" | "COLLABORATOR"
-            )
-        {
+        if action == "issue_comment.command" && allowed.is_empty() && !ev.trusted_commenter {
             continue;
         }
         if auth_actor.is_empty()
@@ -1514,24 +1460,17 @@ async fn webhook(
             continue;
         }
         let configured_labels = filters["labels"].as_array().cloned().unwrap_or_default();
-        if !configured_labels.is_empty() {
-            let labels = payload["pull_request"]["labels"]
-                .as_array()
-                .or(payload["issue"]["labels"].as_array());
-            if !labels.is_some_and(|actual| {
-                actual.iter().any(|l| {
-                    configured_labels.iter().any(|f| {
-                        f.as_str().is_some_and(|x| {
-                            x.eq_ignore_ascii_case(l["name"].as_str().or(l.as_str()).unwrap_or(""))
-                        })
-                    })
-                })
-            }) {
-                continue;
-            }
+        if !configured_labels.is_empty()
+            && !ev.labels.iter().any(|l| {
+                configured_labels
+                    .iter()
+                    .any(|f| f.as_str().is_some_and(|x| x.eq_ignore_ascii_case(l)))
+            })
+        {
+            continue;
         }
         let id = a["id"].as_str().unwrap_or("").to_owned();
-        let tr = json!({"kind":kind,"repository":repo,"number":number,"branch":branch,"event":event,"actor":actor,"payload":payload,"delivery_identity":format!("{connection_id}|{delivery}")});
+        let tr = json!({"kind":ev.kind,"repository":repo,"number":ev.number,"branch":ev.branch,"event":event,"actor":actor,"payload":payload,"delivery_identity":format!("{connection_id}|{delivery}")});
         match run_queue(s.clone(), id, tr).await {
             Ok(_) => queued += 1,
             Err(_) => {
@@ -1549,29 +1488,6 @@ async fn webhook(
     }
     Json(json!({"ok":true,"queued":queued})).into_response()
 }
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    use subtle::ConstantTimeEq;
-    a.ct_eq(b).into()
-}
-fn event_action(event: &str, p: &Value) -> &'static str {
-    let event = match event {
-        "pull_request.synchronized" => "pull_request",
-        "pull_request" => "pull_request",
-        _ => event,
-    };
-    match (event, p["action"].as_str().unwrap_or("")) {
-        ("pull_request", "opened") => "pull_request.opened",
-        ("pull_request", "synchronize" | "synchronized") => "pull_request.synchronize",
-        ("pull_request", "ready_for_review") => "pull_request.ready_for_review",
-        ("issues", "opened") => "issues.opened",
-        ("issues", "labeled") => "issues.labeled",
-        ("issue_comment", "created") => "issue_comment.command",
-        _ => "",
-    }
-}
 fn matches_command(body: &str, command: &str) -> bool {
     let line = body.trim_start();
     line.get(..command.len())
@@ -1581,38 +1497,6 @@ fn matches_command(body: &str, command: &str) -> bool {
             .next()
             .is_none_or(char::is_whitespace)
 }
-type WebhookTarget = (String, &'static str, Option<Value>, Option<String>, String);
-fn webhook_target(p: &Value, event: &str) -> Option<WebhookTarget> {
-    let repo = p["repository"]["full_name"]
-        .as_str()
-        .or_else(|| p["repository"]["name"].as_str())?
-        .to_owned();
-    let actor = p["sender"]["login"]
-        .as_str()
-        .or_else(|| p["sender"]["username"].as_str())
-        .unwrap_or("")
-        .to_owned();
-    let (kind, n, branch) =
-        if event.starts_with("pull_request") || p["issue"]["pull_request"].is_object() {
-            (
-                "pull_request",
-                p["pull_request"]["number"]
-                    .as_number()
-                    .cloned()
-                    .or_else(|| p["issue"]["number"].as_number().cloned())
-                    .map(|n| json!(n)),
-                p["pull_request"]["head"]["ref"].as_str().map(str::to_owned),
-            )
-        } else {
-            (
-                "issue",
-                p["issue"]["number"].as_number().cloned().map(|n| json!(n)),
-                None,
-            )
-        };
-    Some((repo, kind, n, branch, actor))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
