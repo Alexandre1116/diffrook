@@ -105,13 +105,13 @@ try {
   await check('Public self-hosted pricing and Cloud coming soon', async () => {
     const catalog = await api('/api/plans');
     assert.equal(catalog.currency, 'EUR');
-    assert.deepEqual(catalog.self_hosted.map(p => [p.id, p.monthly_eur, p.annual_eur]), [['individual', 0, 0], ['freelancer', 9, 90], ['teams', 29, 290], ['enterprise', 8, 80]]);
+    assert.deepEqual(catalog.self_hosted.map(p => [p.id, p.monthly_eur, p.annual_eur]), [['individual', 0, 0], ['freelancer', 5.99, 59.9], ['teams', 9.99, 99.9], ['enterprise', null, null]]);
     for (const plans of [catalog.self_hosted, catalog.cloud.plans]) {
       assert.deepEqual(plans.map(p => [p.id, p.sso]), [['individual', false], ['freelancer', false], ['teams', true], ['enterprise', true]]);
     }
     assert.equal(catalog.cloud.status, 'coming_soon');
     assert.equal(catalog.cloud.purchase_available, false);
-    assert.ok(catalog.cloud.plans.every(p => p.monthly_eur > 0));
+    assert.ok(catalog.cloud.plans.every(p => p.contact_sales || p.monthly_eur > 0));
     await api('/api/plans/cloud/activate', 'POST', { plan: 'teams' }, { status: 404 });
   });
   await check('Setup and authentication', async () => {
@@ -199,7 +199,7 @@ try {
       return;
     }
     await api('/api/license/beta-plan', 'POST', { edition: 'enterprise' }, { status: 403 });
-    for (const [edition, users, automations, sso] of [['freelancer', 1, 10, false], ['teams', 5, 20, true]]) {
+    for (const [edition, users, automations, sso] of [['freelancer', 1, 10, false], ['teams', 10, 200, true]]) {
       const status = await api('/api/license/beta-plan', 'POST', { edition });
       assert.equal(status.edition, edition); assert.equal(status.license_status, 'beta_free');
       assert.deepEqual(status.limits, { users, automations }); assert.equal(status.features.sso, sso);

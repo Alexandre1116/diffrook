@@ -5,23 +5,28 @@ import "./plans.css";
 type Plan = {
   id: string; name: string; users: number | null; automations: number | null;
   min_users?: number; automations_per_user?: number; sso: boolean;
-  commercial_use: boolean; monthly_eur: number; annual_eur: number;
-  per_user: boolean; free_forever?: boolean;
+  commercial_use: boolean; monthly_eur: number | null; annual_eur: number | null;
+  per_user: boolean; free_forever?: boolean; contact_sales?: boolean;
   executions_per_month?: number; executions_per_user_per_month?: number;
 };
 export type PlanCatalog = {
   currency: string; self_hosted: Plan[];
   beta?: { enabled: boolean; free_self_hosted_plans: string[]; commercial_use_plans: string[]; stable_requires_paid_license: boolean };
-  self_hosted_automation_pack: { automations: number; monthly_eur: number; annual_eur: number };
+  self_hosted_automation_pack: { automations: number; monthly_eur: number | null; annual_eur: number | null };
   cloud: {
     status: string; purchase_available: boolean; plans: Plan[];
-    automation_pack: { automations: number; monthly_eur: number; annual_eur: number };
+    automation_pack: { automations: number; monthly_eur: number | null; annual_eur: number | null };
     execution_pack: { executions: number; monthly_eur: number };
     ai: { token_unit: number; models: { id: string; name: string; input_eur: number; output_eur: number }[] };
   };
 };
 const money = (amount: number) => new Intl.NumberFormat("en-IE", { style: "currency", currency: "EUR", maximumFractionDigits: 2 }).format(amount);
 const instructions = "https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md";
+const sales = "mailto:hello@diffrook.dev";
+// Per-user plans: Teams has a user cap (users), Enterprise only a minimum.
+const userRange = (plan: Plan) => plan.users ? `${plan.min_users ?? 1}–${plan.users} users` : `From ${plan.min_users} users`;
+// Prices carry cents, so total in whole cents to avoid floating-point drift.
+const total = (price: number, units: number) => Math.round(price * 100) * units / 100;
 
 export default function Plans({ catalog, edition, installationId, notice, selectBetaPlan }: {
   catalog: PlanCatalog; edition: string; installationId: string; notice: (text: string) => void;
@@ -29,7 +34,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
 }) {
   const [hosting, setHosting] = useState<"self_hosted" | "cloud">("self_hosted");
   const [period, setPeriod] = useState<"monthly" | "annual">("monthly");
-  const [seats, setSeats] = useState(String(catalog.self_hosted.find(p => p.per_user)!.min_users)), [packs, setPacks] = useState("0");
+  const [seats, setSeats] = useState<Record<string, string>>({});
   const cloud = hosting === "cloud";
   const beta = catalog.beta?.enabled === true;
   const [changingPlan, setChangingPlan] = useState(false);
@@ -41,21 +46,22 @@ export default function Plans({ catalog, edition, installationId, notice, select
     finally { setChangingPlan(false); }
   };
   const plans = cloud ? catalog.cloud.plans : catalog.self_hosted;
-  const pack = cloud ? catalog.cloud.automation_pack : catalog.self_hosted_automation_pack;
-  const enterprisePlan = plans.find(p => p.per_user)!;
-  const users = Number(seats), extraPacks = Number(packs);
-  const validEnterprise = seats.trim() !== "" && packs.trim() !== "" && Number.isSafeInteger(users) && users >= enterprisePlan.min_users!
-    && Number.isSafeInteger(extraPacks) && extraPacks >= 0 && users * enterprisePlan.automations_per_user! + extraPacks * pack.automations <= 2147483647;
+  const seatText = (plan: Plan) => seats[plan.id] ?? String(plan.min_users ?? 1);
+  const seatCount = (plan: Plan) => Number(seatText(plan));
+  const validSeats = (plan: Plan) => {
+    const users = seatCount(plan);
+    return seatText(plan).trim() !== "" && Number.isSafeInteger(users) && users >= (plan.min_users ?? 1) && (!plan.users || users <= plan.users);
+  };
   const prepareRequest = (plan: Plan) => {
-    if (beta || cloud || plan.free_forever || (plan.per_user && !validEnterprise)) return;
-    const count = plan.per_user ? users : plan.users;
-    const extra = plan.per_user ? extraPacks : 0;
+    const price = plan[`${period}_eur`];
+    if (beta || cloud || plan.free_forever || price == null || (plan.per_user && !validSeats(plan))) return;
+    const users = plan.per_user ? seatCount(plan) : plan.users!;
     const request = {
       request_version: 1, hosting: "self_hosted", installation_id: installationId,
-      plan: plan.id, billing_period: period, users: count, extra_automation_packs: extra,
-      automations: plan.per_user ? users * plan.automations_per_user! + extra * pack.automations : plan.automations,
+      plan: plan.id, billing_period: period, users, extra_automation_packs: 0,
+      automations: plan.per_user ? users * plan.automations_per_user! : plan.automations,
       currency: catalog.currency, tax_included: false,
-      quoted_amount: plan[`${period}_eur`] * (plan.per_user ? users : 1) + extra * pack[`${period}_eur`],
+      quoted_amount: total(price, plan.per_user ? users : 1),
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(request, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `diffrook-${plan.id}-license-request.json`; link.click(); URL.revokeObjectURL(url);
@@ -79,36 +85,37 @@ export default function Plans({ catalog, edition, installationId, notice, select
       ? "Coming soon. Preview prices for hosting, backups and managed updates. AI usage is billed separately. Purchases and activation are unavailable."
       : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "Run Diffrook on your server with your own AI provider or local model. Paid licenses renew monthly or annually; executions have no license quota."}</p>
     <div className="plan-grid">{plans.map(plan => {
-      const enterprise = plan.per_user;
+      const perUser = plan.per_user;
       const amount = plan[`${period}_eur`];
-      const total = amount * (enterprise ? users : 1) + (enterprise ? extraPacks * pack[`${period}_eur`] : 0);
-      const automations = enterprise ? users * plan.automations_per_user! + extraPacks * pack.automations : plan.automations;
+      const contact = plan.contact_sales || amount == null;
+      const users = seatCount(plan);
+      const automations = perUser ? users * plan.automations_per_user! : plan.automations;
       const current = !cloud && edition === plan.id;
       const freeBeta = !cloud && beta && catalog.beta!.free_self_hosted_plans.includes(plan.id);
       const excludedBeta = !cloud && beta && !freeBeta;
       return <article className={`panel-card plan-card${current ? " current-plan" : ""}`} key={plan.id}>
         <div className="plan-card-heading"><h3>{plan.name}</h3>{current && <span className="plan-badge">Current plan</span>}{cloud && <span className="plan-badge">Coming soon</span>}</div>
-        <div className="plan-price">{plan.free_forever || freeBeta ? "Free" : excludedBeta ? "Coming soon" : money(amount)}{freeBeta && !plan.free_forever ? <small> during beta</small> : !plan.free_forever && !excludedBeta && <small>/{enterprise ? "user/" : ""}{period === "annual" ? "year" : "month"}</small>}</div>
+        <div className="plan-price">{plan.free_forever || freeBeta ? "Free" : excludedBeta ? "Coming soon" : contact ? "Contact us" : money(amount!)}{freeBeta && !plan.free_forever ? <small> during beta</small> : !plan.free_forever && !excludedBeta && !contact && <small>/{perUser ? "user/" : ""}{period === "annual" ? "year" : "month"}</small>}</div>
         <p className="plan-use">{plan.free_forever ? "Free forever for personal use" : plan.commercial_use ? "Professional and commercial use" : "Personal, noncommercial use"}</p>
         <ul className="plan-features">
-          <li><Check size={14} />{enterprise ? `From ${plan.min_users} users` : `${plan.users} ${plan.users === 1 ? "user" : "users"}`}</li>
-          <li><Check size={14} />{enterprise ? `${plan.automations_per_user} automations per user, pooled` : `${plan.automations} saved automations`}</li>
+          <li><Check size={14} />{perUser ? userRange(plan) : `${plan.users} ${plan.users === 1 ? "user" : "users"}`}</li>
+          <li><Check size={14} />{perUser ? `${plan.automations_per_user} automations per user, pooled` : `${plan.automations} saved automations`}</li>
           <li><Check size={14} />{plan.sso ? "SSO with OpenID Connect" : "Local account sign-in"}</li>
           <li><Check size={14} />{cloud ? "Your AI key or pay as you go" : "Bring your own AI"}</li>
-          {cloud && <li><Check size={14} />{enterprise ? `${plan.executions_per_user_per_month!.toLocaleString()} executions/user/month` : `${plan.executions_per_month!.toLocaleString()} executions/month`}</li>}
+          {cloud && <li><Check size={14} />{perUser ? `${plan.executions_per_user_per_month!.toLocaleString()} executions/user/month` : `${plan.executions_per_month!.toLocaleString()} executions/month`}</li>}
         </ul>
-        {enterprise && !excludedBeta && <div className="plan-enterprise">
-          <label>Licensed users<input aria-label={`${cloud ? "Cloud" : "Self-hosted"} Enterprise users`} type="number" min={plan.min_users} step={1} value={seats} onChange={e => setSeats(e.target.value)} /></label>
-          <label>Extra packs of {pack.automations} automations<input aria-label={`${cloud ? "Cloud" : "Self-hosted"} Enterprise automation packs`} type="number" min={0} step={1} value={packs} onChange={e => setPacks(e.target.value)} /></label>
-          <p>{money(pack[`${period}_eur`])} per pack/{period === "annual" ? "year" : "month"}</p>
-          {validEnterprise ? <p className="plan-total">{money(total)}/{period === "annual" ? "year" : "month"} · {automations} automations</p> : <p role="alert">Enter at least {plan.min_users} users and a valid pack count.</p>}
+        {perUser && !contact && !excludedBeta && !freeBeta && <div className="plan-enterprise">
+          <label>Licensed users<input aria-label={`${cloud ? "Cloud" : "Self-hosted"} ${plan.name} users`} type="number" min={plan.min_users ?? 1} max={plan.users ?? undefined} step={1} value={seatText(plan)} onChange={e => setSeats(s => ({ ...s, [plan.id]: e.target.value }))} /></label>
+          {validSeats(plan) ? <p className="plan-total">{money(total(amount!, users))}/{period === "annual" ? "year" : "month"} · {automations} automations</p> : <p role="alert">Enter between {plan.min_users ?? 1} and {plan.users} users.</p>}
         </div>}
+        {perUser && contact && !excludedBeta && <p className="plan-use">Larger deployments and automation packs are priced by arrangement.</p>}
         <div className="plan-card-action">{cloud
           ? <button className="btn secondary full" type="button" disabled>Coming soon</button>
           : freeBeta ? <button className="btn secondary full" type="button" disabled={current || changingPlan || !selectBetaPlan} onClick={() => void chooseBetaPlan(plan.id)}>{current ? "Current beta plan" : changingPlan ? "Applying plan..." : "Use free during beta"}</button>
           : excludedBeta ? <button className="btn secondary full" type="button" disabled>Not included in free beta</button>
           : plan.free_forever ? <span className="plan-free-note">No license fee · Personal use only</span>
-          : <button className="btn secondary full" type="button" disabled={enterprise && !validEnterprise} onClick={() => prepareRequest(plan)}>Prepare license request</button>}
+          : contact ? <a className="btn secondary full" href={sales}>Contact us</a>
+          : <button className="btn secondary full" type="button" disabled={perUser && !validSeats(plan)} onClick={() => prepareRequest(plan)}>Prepare license request</button>}
         </div>
       </article>;
     })}</div>

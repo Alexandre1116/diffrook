@@ -43,16 +43,23 @@ fn subscription_limits(edition: &str, users: u32, packs: u32) -> anyhow::Result<
         definition["commercial_use"] == true,
         "A subscription must use a paid self-hosted plan"
     );
-    let automations = if edition == "enterprise" {
+    let automations = if definition["per_user"] == true {
+        // Per-user plans scale with licensed seats: Teams up to its user cap,
+        // Enterprise from its minimum. Automation packs are Enterprise-only.
         ensure!(
-            u64::from(users) >= definition["min_users"].as_u64().unwrap(),
-            "Enterprise requires at least 10 users"
+            u64::from(users) >= definition["min_users"].as_u64().unwrap_or(1)
+                && definition["users"]
+                    .as_u64()
+                    .is_none_or(|max| u64::from(users) <= max),
+            "Licensed users are outside this plan's range"
+        );
+        let pack = &catalog()["self_hosted_automation_pack"];
+        ensure!(
+            packs == 0 || pack["enterprise_only"] != true || edition == "enterprise",
+            "Automation packs require Enterprise"
         );
         u64::from(users) * definition["automations_per_user"].as_u64().unwrap()
-            + u64::from(packs)
-                * catalog()["self_hosted_automation_pack"]["automations"]
-                    .as_u64()
-                    .unwrap()
+            + u64::from(packs) * pack["automations"].as_u64().unwrap()
     } else {
         ensure!(
             u64::from(users) == definition["users"].as_u64().unwrap() && packs == 0,
@@ -68,6 +75,17 @@ fn subscription_limits(edition: &str, users: u32, packs: u32) -> anyhow::Result<
         users: Some(users),
         automations: Some(automations as u32),
     })
+}
+
+/// Allowances signed under the original 0.2 price list: Teams was a fixed 5
+/// users and 20 automations, Enterprise 10 automations per user. Licences
+/// issued then stay valid with the allowance they were signed with.
+fn legacy_subscription_automations(edition: &str, users: u32, packs: u32) -> Option<u64> {
+    match edition {
+        "teams" if users == 5 && packs == 0 => Some(20),
+        "enterprise" if users >= 10 => Some(u64::from(users) * 10 + u64::from(packs) * 10),
+        _ => None,
+    }
 }
 
 pub const INDIVIDUAL_USERS: u32 = 1;
@@ -408,17 +426,20 @@ fn verify(bytes: &[u8], key: &VerifyingKey, installation: uuid::Uuid) -> anyhow:
             matches!(claims.billing_period.as_deref(), Some("monthly" | "annual")),
             "Invalid subscription billing period"
         );
-        let limits = subscription_limits(
-            &claims.edition,
-            claims
-                .max_users
-                .context("Subscription users are required")?,
-            claims
-                .extra_automation_packs
-                .context("Subscription pack count is required")?,
-        )?;
+        let users = claims
+            .max_users
+            .context("Subscription users are required")?;
+        let packs = claims
+            .extra_automation_packs
+            .context("Subscription pack count is required")?;
+        let signed = claims.max_automations.map(u64::from);
+        let legacy = legacy_subscription_automations(&claims.edition, users, packs);
+        let current = subscription_limits(&claims.edition, users, packs);
         ensure!(
-            limits.automations == claims.max_automations,
+            (signed.is_some() && signed == legacy)
+                || current
+                    .as_ref()
+                    .is_ok_and(|l| l.automations == claims.max_automations),
             "Automation allowance does not match the subscription"
         );
     }
@@ -442,7 +463,7 @@ mod tests {
         for (edition, users, automations, sso) in [
             ("individual", 1, 3, false),
             ("freelancer", 1, 10, false),
-            ("teams", 5, 20, true),
+            ("teams", 10, 200, true),
         ] {
             beta.select_beta_plan(&db, edition).await.unwrap();
             let status = beta.status(&db).await.unwrap();
@@ -495,8 +516,8 @@ mod tests {
         let id = uuid::Uuid::new_v4();
         for (edition, users, packs, automations) in [
             ("freelancer", 1, 0, 10),
-            ("teams", 5, 0, 20),
-            ("enterprise", 10, 2, 120),
+            ("teams", 3, 0, 60),
+            ("enterprise", 10, 2, 220),
         ] {
             let license = License::subscription_for_tests(id, edition, users, packs);
             let value = serde_json::to_value(license.claims.unwrap()).unwrap();
@@ -560,6 +581,43 @@ mod tests {
         assert!(subscription_limits("enterprise", u32::MAX, u32::MAX).is_err());
         assert!(subscription_limits("freelancer", 2, 0).is_err());
         assert!(subscription_limits("teams", 5, 1).is_err());
+        assert!(subscription_limits("teams", 0, 0).is_err());
+        assert!(subscription_limits("teams", 11, 0).is_err());
+        assert!(subscription_limits("enterprise", 10, 1).is_ok());
+    }
+
+    #[test]
+    fn licences_signed_under_the_original_price_list_keep_their_allowance() {
+        let key = SigningKey::from_bytes(&[37; 32]);
+        let id = uuid::Uuid::new_v4();
+        let base = serde_json::to_value(
+            License::subscription_for_tests(id, "teams", 5, 0)
+                .claims
+                .unwrap(),
+        )
+        .unwrap();
+        let signed = |edition: &str, users: u32, packs: u32, automations: u32| {
+            let mut claims = base.clone();
+            claims["edition"] = serde_json::json!(edition);
+            claims["max_users"] = serde_json::json!(users);
+            claims["extra_automation_packs"] = serde_json::json!(packs);
+            claims["max_automations"] = serde_json::json!(automations);
+            verify(&envelope(&claims, &key), &key.verifying_key(), id)
+        };
+        // Original Teams (5 users, 20) and Enterprise (10 per user, packs of 10).
+        assert_eq!(signed("teams", 5, 0, 20).unwrap().max_automations, Some(20));
+        assert_eq!(
+            signed("enterprise", 10, 2, 120).unwrap().max_automations,
+            Some(120)
+        );
+        // Current price list.
+        assert!(signed("teams", 5, 0, 100).is_ok());
+        assert!(signed("enterprise", 10, 2, 220).is_ok());
+        // Neither list allows these.
+        assert!(signed("teams", 5, 0, 21).is_err());
+        assert!(signed("teams", 4, 0, 20).is_err());
+        assert!(signed("teams", 11, 0, 220).is_err());
+        assert!(signed("enterprise", 10, 0, 150).is_err());
     }
 
     #[test]

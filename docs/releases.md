@@ -9,6 +9,10 @@ New in this beta:
   See [code hosts](../README.md#code-hosts) for tokens, repository formats and webhooks.
 - A release channel next to the update policy. The stable channel keeps
   pre-releases out of automatic and offered updates; the beta channel includes them.
+- The plan catalog follows the current price list: Freelancer EUR 5.99/month,
+  Teams EUR 9.99 per user/month for up to 10 users with 20 automations each,
+  and Enterprise by arrangement. A free Teams beta now allows 10 users and 200
+  automations. Licences signed under the earlier prices keep their allowance.
 - Refreshed TLS dependencies (rustls, rustls-webpki, webpki-roots) for recent
   security advisories.
 
@@ -22,7 +26,7 @@ are free during the beta program; Enterprise is excluded and unavailable.
 
 - Individual: personal noncommercial use, 1 user and 3 automations, free forever.
 - Freelancer: professional and commercial use, 1 user and 10 automations, no SSO, free during beta.
-- Teams: organizational and commercial use, 5 users and 20 automations, OIDC SSO, free during beta.
+- Teams: organizational and commercial use, up to 10 users and 20 automations per user, OIDC SSO, free during beta.
 - Enterprise: excluded from free beta; new paid sales remain disabled.
 
 Select the free plan in Settings. SSO-only installations can bootstrap with

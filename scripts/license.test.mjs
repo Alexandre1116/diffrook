@@ -34,7 +34,7 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
   const claims = JSON.parse(payload);
   assert.equal(claims.installation_id, id);
   assert.equal(claims.max_users, 20);
-  assert.equal(claims.max_automations, 220);
+  assert.equal(claims.max_automations, 420);
   assert.equal(claims.version, 2);
   assert.equal(claims.edition, 'enterprise');
   assert.equal(claims.billing_period, 'annual');
@@ -49,11 +49,11 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
   assert.notEqual(run(...argumentsList).status, 0);
   assert.deepEqual(await readFile(output), saved);
   const base = ['issue', '--installation', id, '--customer', 'Test', '--period', 'monthly'];
-  for (const [edition, users, automations, price] of [['freelancer', 1, 10, 9], ['teams', 5, 20, 29], ['enterprise', 10, 100, 80]]) {
+  for (const [edition, users, automations, price] of [['freelancer', 1, 10, '5.99 EUR/month'], ['teams', 1, 20, '9.99 EUR/month'], ['enterprise', 10, 200, 'price by arrangement']]) {
     const path = join(directory, `${edition}.json`);
     const result = run(...base, '--plan', edition, '--out', path);
     assert.equal(result.status, 0, result.stderr);
-    assert.ok(result.stdout.includes(`${price} EUR/month`));
+    assert.ok(result.stdout.includes(price), result.stdout);
     const issued = JSON.parse(Buffer.from(JSON.parse(await readFile(path, 'utf8')).payload, 'base64url'));
     assert.equal(issued.max_users, users);
     assert.equal(issued.max_automations, automations);
@@ -63,26 +63,27 @@ test('owner CLI protects keys and issues verifiable installation-bound licenses'
   for (const options of [
     ['--plan', 'individual'], ['--plan', 'cloud'], ['--plan', 'business'],
     ['--plan', 'freelancer', '--users', '2'], ['--plan', 'teams', '--automation-packs', '1'],
+    ['--plan', 'teams', '--users', '0'], ['--plan', 'teams', '--users', '11'],
     ['--plan', 'enterprise', '--users', '9'], ['--plan', 'enterprise', '--automation-packs', '-1'],
     ['--plan', 'enterprise', '--users', '2147483647'], ['--plan', 'teams', '--expires', '2000-01-01'],
   ]) assert.notEqual(run(...base, ...options, '--out', join(directory, 'invalid.json')).status, 0, options.join(' '));
   assert.notEqual(run('issue', '--plan', 'freelancer', '--installation', id, '--customer', 'Test', '--out', join(directory, 'no-period.json')).status, 0);
   const requestPath=join(directory,'request.json');
-  const request={request_version:1,hosting:'self_hosted',installation_id:id,plan:'teams',billing_period:'monthly',users:5,extra_automation_packs:0,automations:20,currency:'EUR',tax_included:false,quoted_amount:1};
+  const request={request_version:1,hosting:'self_hosted',installation_id:id,plan:'teams',billing_period:'monthly',users:5,extra_automation_packs:0,automations:100,currency:'EUR',tax_included:false,quoted_amount:1};
   await writeFile(requestPath,JSON.stringify(request));
   const quoted=run('quote','--request',requestPath);
   assert.equal(quoted.status,0,quoted.stderr);
-  assert.equal(JSON.parse(quoted.stdout).amount,29);
+  assert.equal(JSON.parse(quoted.stdout).amount,49.95);
   assert.equal(JSON.parse(quoted.stdout).payment_verified,false);
   assert.match(quoted.stderr,/differs from the current catalog/);
   const requestedOutput=join(directory,'requested.json');
   const requested=run('issue','--request',requestPath,'--customer','Request customer','--out',requestedOutput);
   assert.equal(requested.status,0,requested.stderr);
   const requestedClaims=JSON.parse(Buffer.from(JSON.parse(await readFile(requestedOutput,'utf8')).payload,'base64url'));
-  assert.equal(requestedClaims.max_users,5);assert.equal(requestedClaims.max_automations,20);
+  assert.equal(requestedClaims.max_users,5);assert.equal(requestedClaims.max_automations,100);
   assert.equal(requestedClaims.customer,'Request customer');
   assert.notEqual(run('issue','--request',requestPath,'--plan','teams','--customer','Test','--out',join(directory,'override.json')).status,0);
-  for(const change of [{users:6},{automations:999},{extra_automation_packs:1},{hosting:'cloud'},{unknown:true}]){
+  for(const change of [{users:11},{users:6},{automations:999},{extra_automation_packs:1},{hosting:'cloud'},{unknown:true}]){
     await writeFile(requestPath,JSON.stringify({...request,...change}));
     assert.notEqual(run('quote','--request',requestPath).status,0);
   }

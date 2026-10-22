@@ -41,13 +41,15 @@ owner confirms legal and fiscal readiness. Individual remains free forever.
 | Self-hosted plan | Registered users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
 | Individual | 1 | 3 | No | Free forever | Free |
-| Freelancer | 1 | 10 | No | 9 | 90 |
-| Teams | 5 | 20 | Yes | 29 | 290 |
-| Enterprise | Purchased seats, minimum 10 | 10 per purchased seat, pooled | Yes | 8/seat | 80/seat |
+| Freelancer | 1 | 10 | No | 5.99 | 59.90 |
+| Teams | Purchased seats, 1 to 10 | 20 per purchased seat, pooled | Yes | 9.99/seat | 99.90/seat |
+| Enterprise | Purchased seats, minimum 10 | 20 per purchased seat, pooled | Yes | Contact us | Contact us |
 
-Enterprise starts at EUR 80/month or EUR 800/year for ten users and 100 automations.
-Enterprise-only packs add ten automations for EUR 5/month or EUR 50/year. Annual
-subscriptions cost ten monthly payments, paid up front. Paid plans include
+Enterprise pricing and Enterprise-only packs of ten extra automations are
+arranged directly. Annual subscriptions cost ten monthly payments, paid up front.
+Licences issued under the original 0.2 price list (Teams with 5 users and 20
+automations, Enterprise with 10 automations per seat) remain valid with the
+allowance they were signed with. Paid plans include
 software updates during their term; response times and availability SLAs require
 a separate agreement. Disabled automations count. Repository bot credentials
 are connections, not Diffrook users.
@@ -67,13 +69,12 @@ metering, hosted operations and billing are not available. All hosted plans are 
 
 | Planned Cloud plan | Users | Saved automations | SSO | Monthly | Annual | Executions/month |
 | --- | ---: | ---: | :---: | ---: | ---: | ---: |
-| Individual | 1 | 3 | No | 9 | 90 | 500 |
-| Freelancer | 1 | 10 | No | 19 | 190 | 2,000 |
-| Teams | 5 | 20 | Yes | 59 | 590 | 10,000 |
-| Enterprise | Minimum 10 | 10 per seat, pooled | Yes | 15/seat | 150/seat | 2,000/seat |
+| Individual | 1 | 3 | No | 5.99 | 59.90 | 500 |
+| Freelancer | 1 | 10 | No | 9.99 | 99.90 | 2,000 |
+| Teams | 1 to 10 seats | 20 per seat, pooled | Yes | 14.99/seat | 149.90/seat | 2,000/seat |
+| Enterprise | Minimum 10 | 20 per seat, pooled | Yes | Contact us | Contact us | 2,000/seat |
 
-Cloud Enterprise starts at EUR 150/month or EUR 1,500/year. Enterprise packs
-add ten automations for EUR 10/month or EUR 100/year. Another 1,000 executions
+Cloud Enterprise and its automation packs are priced by arrangement. Another 1,000 executions
 will cost EUR 5, with customer approval, plus AI usage. These execution quotas
 must be validated with load tests before launch. Prices assume shared
 infrastructure with customer isolation. Dedicated hosting and availability
@@ -92,16 +93,16 @@ Proposed Diffrook sale rates per one million tokens:
 These are proposed sale prices, not provider prices. Cache will have separate
 rates. Monthly AI budgets, alerts and stopping consumption at the budget limit
 are planned. Without caching, two million Sonnet input tokens and 200,000 output
-tokens cost EUR 9; Freelancer Cloud then totals EUR 28 that month before tax.
+tokens cost EUR 9; Freelancer Cloud then totals EUR 18.99 that month before tax.
 
 ## Obtain and install a paid self-hosted license
 
 1. Open **Settings** and copy the **Installation ID**, persisted in SQLite.
    For a fresh SSO-only installation, the login screen and `GET /api/status`
    expose this non-secret ID before login.
-2. In **Plans and pricing**, select monthly or annual billing and, for Enterprise,
-   at least ten seats and any extra automation packs. Download **Prepare license
-   request**. Visit [diffrook.dev/buy](https://diffrook.dev/buy/), import the request
+2. In **Plans and pricing**, select monthly or annual billing and, for Teams,
+   the number of seats (1 to 10). Enterprise is arranged directly. Download
+   **Prepare license request**. Visit [diffrook.dev/buy](https://diffrook.dev/buy/), import the request
    or enter the Installation ID and select the plan. Enter the licence holder name.
    The JSON is a request and quote, not a license or receipt. Purchases remain
    disabled until legal and fiscal setup is complete and the owner reopens sales. On an SSO-only instance,
@@ -216,14 +217,14 @@ Annual Freelancer:
 node scripts/license.mjs issue --plan freelancer --period annual --installation CUSTOMER_UUID --customer "Freelancer name" --out ./secrets/freelancer-license.json
 ```
 
-Monthly Teams:
+Monthly Teams for five seats: 100 automations and EUR 49.95/month before tax:
 
 ```sh
-node scripts/license.mjs issue --plan teams --period monthly --installation CUSTOMER_UUID --customer "Company name" --out ./secrets/teams-license.json
+node scripts/license.mjs issue --plan teams --period monthly --users 5 --installation CUSTOMER_UUID --customer "Company name" --out ./secrets/teams-license.json
 ```
 
-Annual Enterprise, twenty seats plus two packs: twenty users, 220 automations
-and EUR 1,700/year before tax:
+Annual Enterprise, twenty seats plus two packs: twenty users and 420
+automations, at the price agreed with the customer:
 
 ```sh
 node scripts/license.mjs issue --plan enterprise --period annual --users 20 --automation-packs 2 --installation CUSTOMER_UUID --customer "Company name" --out ./secrets/enterprise-license.json
@@ -231,8 +232,9 @@ node scripts/license.mjs issue --plan enterprise --period annual --users 20 --au
 
 `--plan` and `--period` are required. Expiry defaults to one calendar month or
 year from issuance, clamping month-end days. Optional `--expires` specifies a
-future ISO date/time matching the paid contract. Enterprise defaults to ten
-seats and zero packs. Other plans reject seat or pack overrides. Cloud,
+future ISO date/time matching the paid contract. Teams defaults to one
+seat and accepts up to ten; Enterprise defaults to ten seats and zero packs.
+Freelancer rejects seat overrides and only Enterprise accepts packs. Cloud,
 Individual and new generic Business files cannot be issued. The tool prints
 the quote and does not collect payment.
 

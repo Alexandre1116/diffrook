@@ -192,7 +192,8 @@ async fn beta_plan_selection_requires_authentication_and_enforces_real_allowance
             StatusCode::FORBIDDEN
         );
     }
-    for (edition, max, sso) in [("freelancer", 10, false), ("teams", 20, true)] {
+    // Teams allows 20 automations for each of its up to 10 users.
+    for (edition, max, sso) in [("freelancer", 10, false), ("teams", 200, true)] {
         let (code, status) = call(
             &app,
             "POST",
@@ -254,7 +255,7 @@ async fn beta_plan_selection_requires_authentication_and_enforces_real_allowance
     )
     .await;
     assert_eq!(status["over_limit"], true);
-    assert_eq!(status["usage"]["automations"], 20);
+    assert_eq!(status["usage"]["automations"], 200);
     assert_eq!(status["commercial_use"], false);
     assert_eq!(status["features"]["sso"], false);
 }
@@ -344,13 +345,17 @@ async fn public_catalog_lists_approved_prices_but_never_offers_cloud_activation(
     assert_eq!(code, StatusCode::OK);
     assert_eq!(catalog["currency"], "EUR");
     assert_eq!(catalog["self_hosted"][0]["free_forever"], true);
-    assert_eq!(catalog["self_hosted"][1]["monthly_eur"], 9);
-    assert_eq!(catalog["self_hosted"][2]["annual_eur"], 290);
+    assert_eq!(catalog["self_hosted"][1]["monthly_eur"], 5.99);
+    assert_eq!(catalog["self_hosted"][2]["monthly_eur"], 9.99);
+    assert_eq!(catalog["self_hosted"][2]["per_user"], true);
+    assert_eq!(catalog["self_hosted"][2]["users"], 10);
+    assert_eq!(catalog["self_hosted"][2]["automations_per_user"], 20);
     assert_eq!(catalog["self_hosted"][3]["min_users"], 10);
+    assert_eq!(catalog["self_hosted"][3]["contact_sales"], true);
     assert_eq!(catalog["cloud"]["status"], "coming_soon");
     assert_eq!(catalog["cloud"]["purchase_available"], false);
     for plan in catalog["cloud"]["plans"].as_array().unwrap() {
-        assert!(plan["monthly_eur"].as_u64().unwrap() > 0);
+        assert!(plan["contact_sales"] == true || plan["monthly_eur"].as_f64().unwrap() > 0.0);
     }
     assert_eq!(
         call(
