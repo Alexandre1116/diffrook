@@ -41,7 +41,10 @@ const mock = http.createServer(async (req, res) => {
     return send(path.endsWith('/messages') ? { content: [{ type: 'text', text }], usage: { input_tokens: 100, output_tokens: 80 } } : path === '/api/chat' ? { message: { content: text }, prompt_eval_count: 100, eval_count: 80 } : { choices: [{ message: { content: text }, finish_reason: 'stop' }], usage: { prompt_tokens: 100, completion_tokens: 80 } });
   }
   if (path === '/notify') return send({ ok: true });
-  if (path === '/repos/acme/demo' && req.method === 'GET') return send({ full_name: 'acme/demo', default_branch: 'main', html_url: 'https://example.invalid/acme/demo', fork: false });
+  if (path === '/repos/acme/demo' && req.method === 'GET') return send({ full_name: 'acme/demo', default_branch: 'main', html_url: 'https://example.invalid/acme/demo', fork: false, owner: { login: 'acme', type: 'User' } });
+  if (path === '/repos/bigco/platform' && req.method === 'GET') return send({ full_name: 'bigco/platform', default_branch: 'main', html_url: 'https://example.invalid/bigco/platform', fork: false, owner: { login: 'bigco', type: 'Organization' } });
+  if (path === '/orgs/bigco') return send({ username: 'bigco' });
+  if (path === '/orgs/acme') return send({ message: 'Not Found' }, 404);
   if (path === '/repos/acme/demo/pulls/7' && !req.headers.accept?.includes('diff')) return send(pr);
   if (path === '/repos/acme/demo/pulls/7.diff' || path === '/repos/acme/demo/pulls/7' && req.headers.accept?.includes('diff')) { res.writeHead(200, { 'content-type': 'text/plain' }); return res.end('diff --git a/src/math.rs b/src/math.rs\n--- a/src/math.rs\n+++ b/src/math.rs\n@@ -1 +1,2 @@\n-pub fn divide(a:i32,b:i32)->i32 { a/b }\n+pub fn divide(a: i32, b: i32) -> i32 {\n+    a / b }\n'); }
   if (path === '/repos/acme/demo/pulls' && req.method === 'GET') return send([pr]);
@@ -192,6 +195,22 @@ try {
     assert.equal(license.can_create_automation, false);
     await api(`/api/automations/${first.id}`, 'DELETE');
     await api(`/api/automations/${second.id}`, 'DELETE');
+  });
+  await check('Individual plan refuses organization repositories', async () => {
+    const org = { name: 'Organization review', repositories: ['bigco/platform'] };
+    for (const connection of [gh, forgejo]) {
+      const refused = await api('/api/automations', 'POST', automation(connection.id, provider.id, org), { status: 403 });
+      assert.match(refused.error, /^bigco\/platform belongs to an organization/);
+    }
+    if ((await api('/api/plans')).beta.enabled !== true) return;
+    await api('/api/license/beta-plan', 'POST', { edition: 'freelancer' });
+    const a = await api('/api/automations', 'POST', automation(gh.id, provider.id, org));
+    await api('/api/license/beta-plan', 'POST', { edition: 'individual' });
+    const run = await waitForRun((await api(`/api/automations/${a.id}/run`, 'POST', { kind: 'repository', repository: 'bigco/platform', branch: 'main' })).id);
+    assert.equal(run.status, 'failed');
+    assert.match(run.error, /belongs to an organization/);
+    assert.ok(!traffic.some(t => t.path.startsWith('/repos/bigco/platform/')), 'Refused runs must not read repository content');
+    await api(`/api/automations/${a.id}`, 'DELETE');
   });
   await check('Free beta plans activate without payment and exclude Enterprise', async () => {
     if ((await api('/api/plans')).beta.enabled !== true) {

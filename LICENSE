@@ -33,6 +33,13 @@ automations also count toward the limit. Multiple accounts, shared accounts
 and splitting an organizational deployment into personal installations do not
 qualify as Individual use.
 
+The Individual plan covers only repositories owned by the person's own
+personal account or personal namespace on a code host. Repositories owned by
+an organization, group, team workspace or shared project require Freelancer,
+Teams, Enterprise or the free beta authorization below, even when the use is
+noncommercial. Diffrook checks repository ownership with the code host; that
+check does not replace or narrow these terms.
+
 The Individual plan has no license fee for permitted use, with no expiry or
 trial period. SSO is not included for new Individual identities. The person
 provides their own server and AI provider or local model. Infrastructure and
@@ -95,8 +102,8 @@ a subscription's contractual term.
 
 Official Diffrook beta builds designated for this offer allow Individual,
 Freelancer and Teams to be used without paying a license fee during the beta
-program. Individual remains limited to personal, noncommercial use with one
-user and three saved automations. Freelancer permits professional and commercial
+program. Individual remains limited to personal, noncommercial use of personal
+repositories with one user and three saved automations. Freelancer permits professional and commercial
 self-hosted use by one user with ten saved automations and without SSO. Teams
 permits self-hosted use within one organization by up to ten registered users
 with two hundred saved automations and OIDC SSO. Disabled automations count.

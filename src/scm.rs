@@ -300,6 +300,38 @@ impl Scm {
             fork: value.get("fork").and_then(Value::as_bool).unwrap_or(false),
         })
     }
+    /// Whether an organization, group, team workspace or shared project owns
+    /// the repository rather than a personal account. The Individual plan
+    /// covers personal repositories only.
+    pub async fn organization_owned(&self, repo: &str) -> Result<bool> {
+        match self.kind {
+            Kind::GitHub => {
+                let v = self.get(&format!("/repos/{}", repo_path(repo)?)).await?;
+                Ok(v.pointer("/owner/type").and_then(Value::as_str) == Some("Organization"))
+            }
+            Kind::GitLab => gitlab::organization_owned(self, repo).await,
+            Kind::BitbucketCloud | Kind::BitbucketDataCenter => {
+                bitbucket::organization_owned(self, repo).await
+            }
+            // Gitea and Forgejo repositories do not say what kind of account
+            // owns them; only organizations resolve under /orgs.
+            Kind::Forgejo | Kind::Gitea => {
+                let (owner, _) = repo
+                    .split_once('/')
+                    .ok_or_else(|| anyhow!("repository must be owner/name"))?;
+                let response = self
+                    .request(reqwest::Method::GET, &format!("/orgs/{}", segment(owner)?))
+                    .send()
+                    .await
+                    .context("SCM GET failed")?;
+                match response.status() {
+                    s if s.is_success() => Ok(true),
+                    reqwest::StatusCode::NOT_FOUND => Ok(false),
+                    s => bail!("SCM returned HTTP {s}"),
+                }
+            }
+        }
+    }
     pub async fn tree(&self, repo: &str, branch: &str) -> Result<Vec<TreeEntry>> {
         let sha = self.branch_sha(repo, branch).await?;
         self.tree_at(repo, &sha).await
@@ -1149,6 +1181,72 @@ mod tests {
     fn branch_names_may_have_safe_slash_components() {
         assert_eq!(branch_path("diffrook/run-1").unwrap(), "diffrook/run-1");
         assert!(branch_path("../main").is_err())
+    }
+    #[tokio::test]
+    async fn every_host_reports_organization_owned_repositories() {
+        use test_server::{client, ok, serve, Reply};
+        let not_found = || Reply {
+            status: "404 Not Found",
+            headers: vec![],
+            body: "{}".into(),
+        };
+        let cases = [
+            ("github", r#"{"owner":{"type":"Organization"}}"#, true),
+            ("github", r#"{"owner":{"type":"User"}}"#, false),
+            ("gitlab", r#"{"namespace":{"kind":"group"}}"#, true),
+            ("gitlab", r#"{"namespace":{"kind":"user"}}"#, false),
+            ("bitbucket", r#"{"owner":{"type":"team"}}"#, true),
+            ("bitbucket", r#"{"owner":{"type":"user"}}"#, false),
+            ("gitea", "{}", true),
+            ("forgejo", "", false),
+        ];
+        for (kind, body, expected) in cases {
+            let reply = if body.is_empty() {
+                not_found()
+            } else {
+                ok(body)
+            };
+            let (origin, server) = serve(vec![reply]).await;
+            let scm = Scm::from_connection(
+                &json!({"kind":kind,"base_url":origin,"token":"t"}),
+                &client(),
+            )
+            .unwrap();
+            assert_eq!(
+                scm.organization_owned("acme/api").await.unwrap(),
+                expected,
+                "{kind} {body}"
+            );
+            let path = &server.await.unwrap()[0].path;
+            let wanted = match kind {
+                "github" => "/repos/acme/api",
+                "gitlab" => "/api/v4/projects/acme%2Fapi",
+                "bitbucket" => "/2.0/repositories/acme/api",
+                _ => "/api/v1/orgs/acme",
+            };
+            assert_eq!(path, wanted);
+        }
+        // Data Center needs no request: only ~user projects are personal.
+        let scm = Scm::from_connection(
+            &json!({"kind":"bitbucket_datacenter","base_url":"http://127.0.0.1:9","token":"t"}),
+            &client(),
+        )
+        .unwrap();
+        assert!(scm.organization_owned("PLAT/api").await.unwrap());
+        assert!(!scm.organization_owned("~dev/api").await.unwrap());
+        // An unexpected status is an error, so runs fail closed.
+        let (origin, _server) = serve(vec![Reply {
+            status: "500 Internal Server Error",
+            headers: vec![],
+            body: "{}".into(),
+        }])
+        .await;
+        let scm = Scm::from_connection(
+            &json!({"kind":"gitea","base_url":origin,"token":"t"}),
+            &client(),
+        )
+        .unwrap();
+        assert!(scm.organization_owned("acme/api").await.is_err());
     }
     #[tokio::test]
     async fn forgejo_uses_native_branch_and_contents_endpoints() {

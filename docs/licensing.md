@@ -32,6 +32,29 @@ to detect release publication. The beta's technical entitlement is removed by
 upgrading to a stable build; the legal beta authorization remains limited to
 the beta program. See [LICENSE section 3a](../LICENSE).
 
+## Individual covers personal repositories
+
+The Individual plan is for repositories owned by your own personal account.
+Repositories owned by an organization, group, team workspace or shared project
+need Freelancer, Teams or Enterprise, even for noncommercial use. During the
+beta, select the free Freelancer or Teams plan in Settings.
+
+On Individual, Diffrook asks the code host who owns each repository when an
+automation is saved and again before every run:
+
+| Code host | Organization-owned when |
+| --- | --- |
+| GitHub and GitHub Enterprise Server | The repository owner type is `Organization` |
+| GitLab | The project namespace is a group |
+| Bitbucket Cloud | The owner is a team workspace |
+| Bitbucket Data Center | The project is not a personal `~user` project |
+| Gitea and Forgejo | The owner resolves as an organization |
+
+Saving is refused for an organization-owned repository. If the owner cannot be
+checked while saving, the automation is saved and the run checks again. A run
+that cannot confirm a personal owner fails before reading repository content.
+The check supports the license terms; it does not replace them.
+
 ## Prices for the official release
 
 The following subscription prices apply to paid licensing after the beta.

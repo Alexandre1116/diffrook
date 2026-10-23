@@ -139,6 +139,17 @@ pub(super) async fn repository(scm: &Scm, repo: &str) -> Result<Repository> {
     })
 }
 
+/// Cloud reports a team workspace as owner type "team". On Data Center only
+/// `~user` projects are personal; every other project is shared.
+pub(super) async fn organization_owned(scm: &Scm, repo: &str) -> Result<bool> {
+    let base = repo_base(scm, repo)?;
+    if !cloud(scm) {
+        return Ok(!repo.starts_with('~'));
+    }
+    let v = scm.get(&base).await?;
+    Ok(v.pointer("/owner/type").and_then(Value::as_str) == Some("team"))
+}
+
 /// Bitbucket Cloud has no recursive tree call, so walk directories breadth
 /// first. Data Center lists every file path in one paged call.
 pub(super) async fn tree_at(scm: &Scm, repo: &str, sha: &str) -> Result<Vec<TreeEntry>> {

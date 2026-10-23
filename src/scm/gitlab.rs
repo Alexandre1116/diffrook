@@ -68,6 +68,11 @@ pub(super) async fn repository(scm: &Scm, repo: &str) -> Result<Repository> {
     })
 }
 
+pub(super) async fn organization_owned(scm: &Scm, repo: &str) -> Result<bool> {
+    let v = scm.get(&project(repo)?).await?;
+    Ok(v.pointer("/namespace/kind").and_then(Value::as_str) == Some("group"))
+}
+
 pub(super) async fn tree_at(scm: &Scm, repo: &str, sha: &str) -> Result<Vec<TreeEntry>> {
     let rows = all(
         scm,

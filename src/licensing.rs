@@ -273,6 +273,19 @@ impl License {
         }
     }
 
+    /// Individual covers repositories owned by a personal account. Returns
+    /// why an organization-owned repository is refused, or None when the
+    /// plan allows it.
+    pub fn organization_repository_restriction(&self) -> Option<&'static str> {
+        (self.edition() == "individual").then(|| {
+            if self.can_select_beta_plan() {
+                "belongs to an organization, group or team workspace. The Individual plan covers personal repositories only; select the free Freelancer or Teams beta plan in Settings."
+            } else {
+                "belongs to an organization, group or team workspace. The Individual plan covers personal repositories only; organization repositories require a Freelancer, Teams or Enterprise license."
+            }
+        })
+    }
+
     pub fn allows_sso(&self) -> bool {
         self.active().is_some_and(|c| c.version == 1)
             || plan(self.edition()).is_some_and(|p| p["sso"] == true)
@@ -311,7 +324,7 @@ impl License {
             "licensed_edition": self.claims.as_ref().map(|c| &c.edition),
             "billing_period": self.claims.as_ref().and_then(|c| c.billing_period.as_deref()),
             "extra_automation_packs": self.claims.as_ref().and_then(|c| c.extra_automation_packs),
-            "features": {"sso":self.allows_sso(),"bring_your_own_ai":true},
+            "features": {"sso":self.allows_sso(),"bring_your_own_ai":true,"organization_repositories":self.organization_repository_restriction().is_none()},
             "installation_id": self.installation_id,
             "license_status": if active.is_some() { "active" } else if self.beta_available { "beta_free" } else if self.claims.is_none() { "not_installed" } else { "expired" },
             "customer": self.claims.as_ref().map(|c| &c.customer),

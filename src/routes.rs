@@ -582,6 +582,11 @@ async fn object_write(
                 );
             }
         }
+        if let Some(restriction) = s.license.organization_repository_restriction() {
+            if let Some(repo) = organization_repository(&s, &v).await {
+                return error(StatusCode::FORBIDDEN, format!("{repo} {restriction}"));
+            }
+        }
     }
     if kind == "notification_providers" {
         if let Some(id) = object_id.as_deref() {
@@ -648,6 +653,25 @@ async fn object_write(
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
     Json(result).into_response()
+}
+/// First configured repository that its code host reports as organization
+/// owned. A failed lookup does not block saving: every run checks again and
+/// fails closed.
+async fn organization_repository(s: &AppState, automation: &Value) -> Option<String> {
+    let id = automation["connection_id"].as_str()?;
+    let mut conn = db::object(&s.db, "connections", id).await.ok()??;
+    s.reveal("connections", &mut conn).ok()?;
+    let scm = crate::scm::Scm::from_connection(&conn, &s.client).ok()?;
+    for repo in automation["repositories"]
+        .as_array()?
+        .iter()
+        .filter_map(Value::as_str)
+    {
+        if scm.organization_owned(repo).await.unwrap_or(false) {
+            return Some(repo.to_owned());
+        }
+    }
+    None
 }
 async fn create_connection(State(s): State<AppState>, h: HeaderMap, v: Json<Value>) -> Response {
     object_write(s, h, "connections", None, v).await
@@ -983,6 +1007,7 @@ async fn execute_run(
         provider,
         trigger,
         client: s.client.clone(),
+        organization_restriction: s.license.organization_repository_restriction(),
     };
     let future = crate::engine::execute(context);
     tokio::pin!(future);

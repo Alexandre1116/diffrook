@@ -9,6 +9,9 @@ pub struct EngineContext {
     pub provider: Value,
     pub trigger: Value,
     pub client: reqwest::Client,
+    /// Set when the plan refuses organization-owned repositories; holds the
+    /// explanation that follows the repository name in the run error.
+    pub organization_restriction: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

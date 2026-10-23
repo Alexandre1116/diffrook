@@ -115,7 +115,10 @@ Diffrook is maintained and licensed by Alexandre Ramos, Diogo Mariano and Guilhe
 
 Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
 The free Individual plan permits personal, noncommercial self-hosted use with
-**one user and three saved automations**, including disabled automations. Company,
+**one user and three saved automations**, including disabled automations, on
+repositories owned by a personal account. Repositories owned by an organization,
+group or team workspace need Freelancer or above, and Diffrook checks this with
+the code host. Company,
 team, employment, freelance and other professional use requires a paid plan
 in stable releases. **During beta, Freelancer and Teams are free**, with their
 normal limits and commercial self-hosted use. Enterprise is excluded. Choose

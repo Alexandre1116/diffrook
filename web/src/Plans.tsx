@@ -113,7 +113,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
           ? <button className="btn secondary full" type="button" disabled>Coming soon</button>
           : freeBeta ? <button className="btn secondary full" type="button" disabled={current || changingPlan || !selectBetaPlan} onClick={() => void chooseBetaPlan(plan.id)}>{current ? "Current beta plan" : changingPlan ? "Applying plan..." : "Use free during beta"}</button>
           : excludedBeta ? <button className="btn secondary full" type="button" disabled>Not included in free beta</button>
-          : plan.free_forever ? <span className="plan-free-note">No license fee · Personal use only</span>
+          : plan.free_forever ? <span className="plan-free-note">No license fee · Personal repositories only</span>
           : contact ? <a className="btn secondary full" href={sales}>Contact us</a>
           : <button className="btn secondary full" type="button" disabled={perUser && !validSeats(plan)} onClick={() => prepareRequest(plan)}>Prepare license request</button>}
         </div>

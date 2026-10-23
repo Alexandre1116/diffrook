@@ -1778,7 +1778,7 @@ function SettingsPage({
           <div className="setting-icon"><KeyRound size={19} /></div>
           <div>
             <h3>{data.license.plan_name} plan</h3>
-            <p>{data.license.beta_free ? "Free beta plan. Freelancer and Teams permit commercial use during beta. Stable releases require a paid license for professional use. No automatic billing." : data.license.edition !== "individual" ? "Paid self-hosted license. Bring your own AI; allowances follow your commercial agreement." : "Free forever for personal, noncommercial use. Professional work requires Freelancer, Teams or Enterprise."}</p>
+            <p>{data.license.beta_free ? "Free beta plan. Freelancer and Teams permit commercial use during beta. Stable releases require a paid license for professional use. No automatic billing." : data.license.edition !== "individual" ? "Paid self-hosted license. Bring your own AI; allowances follow your commercial agreement." : "Free forever for personal, noncommercial use of repositories you own personally. Organization repositories and professional work require Freelancer, Teams or Enterprise."}</p>
             <div className="settings-line"><span>Users</span><b>{data.license.usage.users} / {data.license.limits.users ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>Saved automations</span><b>{data.license.usage.automations} / {data.license.limits.automations ?? "Unlimited"}</b></div>
             <div className="settings-line"><span>License status</span><b>{data.license.license_status.replaceAll("_", " ")}</b></div>

@@ -67,6 +67,15 @@ pub async fn execute(ctx: EngineContext) -> Result<RunOutput> {
         bail!("repository is outside this automation's configured repositories");
     }
     let scm = Scm::from_connection(&ctx.connection, &ctx.client)?;
+    if let Some(restriction) = ctx.organization_restriction {
+        if scm
+            .organization_owned(repo)
+            .await
+            .context("could not check who owns the repository")?
+        {
+            bail!("{repo} {restriction}");
+        }
+    }
     let repository = scm.repository(repo).await?;
     let pr_num = number(&ctx.trigger, "number");
     let issue_num = number(&ctx.trigger, "number");
