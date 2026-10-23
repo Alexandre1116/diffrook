@@ -36,7 +36,7 @@ the beta program. See [LICENSE section 3a](../LICENSE).
 
 The following subscription prices apply to paid licensing after the beta.
 Prices are in EUR before applicable tax. Paid sales remain disabled until the
-owner confirms legal and fiscal readiness. Individual remains free forever.
+licensors confirm legal and fiscal readiness. Individual remains free forever.
 
 | Self-hosted plan | Registered users | Saved automations | SSO | Monthly | Annual |
 | --- | ---: | ---: | :---: | ---: | ---: |
@@ -57,13 +57,13 @@ are connections, not Diffrook users.
 All self-hosted plans provide their own server and AI provider credentials or
 local model. There is no execution-based license charge; infrastructure and
 AI bills are paid directly by the customer. The embedded [catalog](../src/plans.json)
-is shared by the server, owner issuer and Settings. `GET /api/plans` returns only
+is shared by the server, licence issuer and Settings. `GET /api/plans` returns only
 public prices. Authenticated `GET /api/license` returns installation metadata
 and usage. Sending prices or quotas in a request cannot activate a plan.
 
 ## Cloud Hosting: Coming soon
 
-These are preview prices for the future owner-hosted service. Cloud cannot be
+These are preview prices for the future Diffrook-hosted service. Cloud cannot be
 purchased or activated; the issuer cannot create Cloud licenses. Managed AI
 metering, hosted operations and billing are not available. All hosted plans are paid.
 
@@ -109,7 +109,7 @@ that month before tax.
    **Prepare license request**. Visit [diffrook.dev/buy](https://diffrook.dev/buy/), import the request
    or enter the Installation ID and select the plan. Enter the licence holder name.
    The JSON is a request and quote, not a license or receipt. Purchases remain
-   disabled until legal and fiscal setup is complete and the owner reopens sales. On an SSO-only instance,
+   disabled until legal and fiscal setup is complete and the licensors reopen sales. On an SSO-only instance,
    use the Installation ID displayed before login.
 3. Save the private licence link before continuing to Stripe Checkout. After
    confirmed payment, this link provides the signed file and a billing portal.
@@ -124,7 +124,7 @@ before the previous file expires. The self-hosted application does not connect t
 Stripe or fetch renewals. Delivery is through the private download page, not email.
 The billing portal allows payment method updates, invoice downloads and cancellation
 at the end of the paid period. Plan changes and installation transfers require the
-owner. Lost private links require payment verification by the owner before recovery.
+licensors. Lost private links require payment verification by the licensors before recovery.
 The manual issuer is retained for future authorized paid sales; new paid purchases are currently disabled. Legacy signed
 Business v1 files retain their original allowances and expiry, including
 previously issued perpetual files. New v2 subscriptions require a billing
@@ -182,7 +182,7 @@ Editing, deleting and exporting remain available. Creation is blocked for each
 resource at its allowance. Reduce usage or renew. Retained technical access
 does not extend contractual permission to operate commercially.
 
-## Issue licenses as the project owner
+## Issue licenses as a licensor
 
 The existing issuer key is preserved:
 
@@ -254,19 +254,20 @@ There is no online revocation check. Treat issuer key loss as a security event.
 
 ## License terms
 
-Read [LICENSE](../LICENSE). This project-specific text should receive legal review
-before sales. Prior CC BY-NC 4.0 grants, Diffrook 1.0/1.1 grants and existing contracts
+Diffrook is licensed jointly by Alexandre Ramos, Diogo Mariano and Guilherme
+Pereira. Read [LICENSE](../LICENSE). This project-specific text should receive legal review
+before sales. Prior CC BY-NC 4.0 grants, Diffrook 1.0 to 1.3 grants and existing contracts
 remain effective for covered material. Original texts remain in [docs/licenses](licenses/).
 Third-party licenses still apply. Creative Commons explains that [prior CC grants
 are irrevocable](https://creativecommons.org/faq/#what-if-i-change-my-mind-about-using-a-cc-license).
 
 ## Validation
 
-The plan rollout passed 55 Rust tests, the owner CLI test, Clippy with warnings
+The plan rollout passed 55 Rust tests, the licence issuer CLI test, Clippy with warnings
 treated as errors, the frontend production build and 16 integration smoke checks.
 Tests cover paid quotas, concurrent user/automation creation, signed and expired
 subscriptions, legacy Business files, SSO entitlement and existing identity
-access on downgrade. Owner-issued Freelancer, Teams and Enterprise files were
+access on downgrade. Locally issued Freelancer, Teams and Enterprise files were
 also activated in a local server; removing the license preserved over-quota data.
 Browser checks covered monthly/annual quotes, Enterprise packs, the downloaded
 request, mobile layout and disabled Cloud actions. Docker Compose configuration

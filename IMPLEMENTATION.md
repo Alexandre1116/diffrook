@@ -1,6 +1,6 @@
 # Diffrook implementation contract
 
-Diffrook is a self-hosted repository automation service. English UI and documentation. Rust backend, React/TypeScript frontend, SQLite storage, one Docker container plus a persistent `/data` volume. The project owner selected CC BY-NC 4.0; describe the project as source-available, not OSI open source.
+Diffrook is a self-hosted repository automation service. English UI and documentation. Rust backend, React/TypeScript frontend, SQLite storage, one Docker container plus a persistent `/data` volume. It is licensed by Alexandre Ramos, Diogo Mariano and Guilherme Pereira under the Diffrook Personal and Business License (`LICENSE`); describe the project as source-available, not OSI open source.
 
 ## Ownership
 

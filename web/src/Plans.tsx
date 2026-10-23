@@ -65,7 +65,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
     };
     const url = URL.createObjectURL(new Blob([JSON.stringify(request, null, 2)], { type: "application/json" }));
     const link = document.createElement("a"); link.href = url; link.download = `diffrook-${plan.id}-license-request.json`; link.click(); URL.revokeObjectURL(url);
-    notice("License request downloaded. Arrange payment with the Diffrook owner and obtain a signed license to activate it.");
+    notice("License request downloaded. Arrange payment with the Diffrook team and obtain a signed license to activate it.");
   };
   return <section className="plan-catalog" aria-label="Plans and pricing">
     <div className="plan-catalog-head">
@@ -125,6 +125,6 @@ export default function Plans({ catalog, edition, installationId, notice, select
       <div className="plan-table-wrap"><table><caption>Proposed rates per {catalog.cloud.ai.token_unit.toLocaleString()} tokens</caption><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody>{catalog.cloud.ai.models.map(model => <tr key={model.id}><th scope="row">{model.name}</th><td>{money(model.input_eur)}</td><td>{money(model.output_eur)}</td></tr>)}</tbody></table></div>
       <p>Cache will have separate rates. Planned controls include a monthly AI budget, alerts and a stop at the budget limit.</p>
       <p>Additional {catalog.cloud.execution_pack.executions.toLocaleString()} executions: {money(catalog.cloud.execution_pack.monthly_eur)}, with your approval, plus AI usage. Cloud limits will be validated before launch. Dedicated hosting and availability commitments require a separate quote.</p>
-    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "Download a request for the Diffrook owner. Payment and renewal are arranged directly; the request does not activate a plan. Install the signed license for this installation ID."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
+    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "Download a request for the Diffrook team. Payment and renewal are arranged directly; the request does not activate a plan. Install the signed license for this installation ID."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
   </section>;
 }

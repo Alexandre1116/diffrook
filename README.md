@@ -110,7 +110,8 @@ This is the first implementation. GitHub, GitLab, Bitbucket Cloud, Bitbucket Dat
 
 ## License
 
-Copyright 2026 Alexandre Ramos and Diffrook contributors.
+Copyright 2026 Alexandre Ramos, Diogo Mariano, Guilherme Pereira and Diffrook contributors.
+Diffrook is maintained and licensed by Alexandre Ramos, Diogo Mariano and Guilherme Pereira.
 
 Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
 The free Individual plan permits personal, noncommercial self-hosted use with
