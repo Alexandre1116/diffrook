@@ -54,8 +54,7 @@ Assign the IdP application to the appropriate administrators and require MFA in
 the IdP's policy.
 
 SSO defaults to disabling local authentication, including initial password setup.
-New SSO identities require the free Teams beta entitlement or an active signed
-Teams or Enterprise license and
+New SSO identities require an active signed Teams or Enterprise license and
 consume its user allowance, including any existing local administrator. Individual
 uses local sign-in. Previously provisioned SSO identities retain verified sign-in
 access after expiry or upgrade; legacy signed Business licenses remain supported.
@@ -163,15 +162,10 @@ appropriate to the company's private code.
 
 ## Verification and scope
 
-The frontend dependency audit is clean after updating `source-map-js`. The Rust
-audit reports `RUSTSEC-2023-0071` in the OIDC library's `rsa` dependency. That
-[advisory](https://rustsec.org/advisories/RUSTSEC-2023-0071.html) concerns private-key
-timing leakage and currently has no patched release. Production Diffrook only
-performs public-key signature verification and holds no RSA private key. CI has
-an explicit exception for that one advisory, with this applicability assessment;
-it continues to fail on other dependency vulnerabilities. Remove/reassess the
-exception if signing, decryption or private RSA keys are ever introduced. An
-unfiltered audit will still report the advisory.
+The November 2026 fixes, production signing-key verification and scoped dependency
+exceptions are documented in [security and release verification](security.md).
+The free beta offer has ended; stable SSO provisioning requires a valid signed
+Teams or Enterprise entitlement. All new self-hosted and Cloud plans are Coming soon.
 
 The automated suite covers valid and invalid signed OIDC tokens, PKCE transmission,
 browser binding, expiry and concurrent replay; authorization and account identity;

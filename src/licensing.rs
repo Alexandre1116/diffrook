@@ -465,52 +465,25 @@ mod tests {
     use ed25519_dalek::{Signer, SigningKey};
 
     #[tokio::test]
-    async fn beta_plans_are_persisted_bounded_and_ignored_by_stable_releases() {
+    async fn ended_beta_offer_ignores_stored_selections_in_every_build() {
         let dir = tempfile::tempdir().unwrap();
         let db = crate::db::open(dir.path().join("beta.sqlite").to_str().unwrap())
             .await
             .unwrap();
-        let beta = License::load_for_version(&db, "0.2.0-beta.2")
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('beta.plan','teams')")
+            .execute(&db)
             .await
             .unwrap();
-        for (edition, users, automations, sso) in [
-            ("individual", 1, 3, false),
-            ("freelancer", 1, 10, false),
-            ("teams", 10, 200, true),
-        ] {
-            beta.select_beta_plan(&db, edition).await.unwrap();
-            let status = beta.status(&db).await.unwrap();
-            assert_eq!(status["edition"], edition);
-            assert_eq!(
-                status["limits"],
-                serde_json::json!({"users":users,"automations":automations})
-            );
-            assert_eq!(status["features"]["sso"], sso);
-            assert_eq!(status["commercial_use"], edition != "individual");
-            assert_eq!(status["license_status"], "beta_free");
+        for version in ["1.0.0", "0.2.0-beta.3", "1.1.0-beta.1", "invalid"] {
+            let license = License::load_for_version(&db, version).await.unwrap();
+            assert_eq!(license.edition(), "individual");
+            assert_eq!(license.limits().automations, Some(3));
+            assert!(!license.allows_sso());
+            for plan in ["individual", "freelancer", "teams", "enterprise"] {
+                assert!(license.select_beta_plan(&db, plan).await.is_err());
+            }
+            assert_eq!(license.status(&db).await.unwrap()["beta_free"], false);
         }
-        for excluded in ["enterprise", "cloud", "business", "unknown"] {
-            assert!(beta.select_beta_plan(&db, excluded).await.is_err());
-        }
-        let reload = License::load_for_version(&db, "0.2.0-beta.3")
-            .await
-            .unwrap();
-        assert_eq!(reload.edition(), "teams");
-        assert_eq!(reload.installation_id, beta.installation_id);
-        for version in ["0.2.0", "0.3.0-rc.1", "0.3.0+beta", "invalid"] {
-            let stable = License::load_for_version(&db, version).await.unwrap();
-            assert_eq!(stable.edition(), "individual");
-            assert_eq!(stable.limits().automations, Some(3));
-            assert!(!stable.allows_sso());
-            assert!(stable.select_beta_plan(&db, "teams").await.is_err());
-            assert_eq!(stable.status(&db).await.unwrap()["beta_free"], false);
-        }
-        let mut licensed =
-            License::subscription_for_tests(beta.installation_id, "enterprise", 10, 0);
-        licensed.beta_available = true;
-        assert!(licensed.select_beta_plan(&db, "teams").await.is_err());
-        assert_eq!(licensed.limits().users, Some(10));
-        assert_eq!(licensed.status(&db).await.unwrap()["beta_free"], false);
     }
 
     fn envelope(claims: &serde_json::Value, key: &SigningKey) -> Vec<u8> {

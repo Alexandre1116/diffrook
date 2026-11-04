@@ -4,6 +4,23 @@ use tower_http::services::{ServeDir, ServeFile};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--healthcheck") {
+        use std::io::{BufRead, Read, Write};
+        use std::time::Duration;
+        let port = std::env::var("DIFFROOK_PORT").unwrap_or_else(|_| "8080".into());
+        let addr = format!("127.0.0.1:{port}").parse()?;
+        let mut stream = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+        stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+        stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+        stream
+            .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")?;
+        let mut line = String::new();
+        std::io::BufReader::new(stream)
+            .take(1024)
+            .read_line(&mut line)?;
+        anyhow::ensure!(line.starts_with("HTTP/1.1 200 "), "Health check failed");
+        return Ok(());
+    }
     let data_dir = std::env::var("DIFFROOK_DATA_DIR").unwrap_or_else(|_| "./data".into());
     if diffrook::updates::exec_active(std::path::Path::new(&data_dir))? {
         unreachable!();

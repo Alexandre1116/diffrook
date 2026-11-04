@@ -238,3 +238,144 @@ async fn update_policy_is_authenticated_and_persisted() {
         StatusCode::BAD_REQUEST
     );
 }
+
+#[tokio::test]
+async fn strict_inputs_reject_shadow_fields_and_internal_urls_without_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    let cookie = admin(&app, &state).await;
+    for (kind, body) in [
+        (
+            "connections",
+            json!({"name":"probe","kind":"github","is_admin":true}),
+        ),
+        (
+            "connections",
+            json!({"name":"probe","kind":"github","__proto__":{"admin":true}}),
+        ),
+        (
+            "providers",
+            json!({"name":"probe","kind":"openai","default_model":"m","base_url":"https://example.com","is_admin":true}),
+        ),
+        (
+            "notification-providers",
+            json!({"name":"probe","kind":"webhook","url":"https://example.com","admin":true}),
+        ),
+        (
+            "automations",
+            json!({"trigger":{"__proto__":{"admin":true}}}),
+        ),
+        ("automations", json!({"limits":{"max_files":"200"}})),
+        ("automations", json!({"trigger":[]})),
+        ("automations", json!({"notifications":[[]]})),
+        (
+            "automations",
+            json!({"notifications":[{"kind":"webhook","is_admin":true}]}),
+        ),
+    ] {
+        let (status, _, _) = request(
+            &app,
+            "POST",
+            &format!("/api/{kind}"),
+            Some(body),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{kind}");
+    }
+    for base in [
+        "http://127.0.0.1:8080",
+        "http://[::1]",
+        "http://169.254.169.254",
+        "http://10.0.0.1",
+        "http://host.docker.internal",
+    ] {
+        for (kind, body) in [
+            (
+                "connections",
+                json!({"name":"probe","kind":"github","base_url":base}),
+            ),
+            (
+                "providers",
+                json!({"name":"probe","kind":"openai","default_model":"m","base_url":base}),
+            ),
+            (
+                "notification-providers",
+                json!({"name":"probe","kind":"webhook","url":base}),
+            ),
+        ] {
+            assert_eq!(
+                request(
+                    &app,
+                    "POST",
+                    &format!("/api/{kind}"),
+                    Some(body),
+                    Some(&cookie)
+                )
+                .await
+                .0,
+                StatusCode::BAD_REQUEST
+            );
+        }
+    }
+    for kind in [
+        "connections",
+        "providers",
+        "notification_providers",
+        "automations",
+    ] {
+        assert!(diffrook::db::objects(&state.db, kind)
+            .await
+            .unwrap()
+            .is_empty());
+    }
+    let (_, saved, _) = request(
+        &app,
+        "POST",
+        "/api/connections",
+        Some(json!({"name":"valid","kind":"github"})),
+        Some(&cookie),
+    )
+    .await;
+    let mut forged = saved.clone();
+    forged["is_admin"] = json!(true);
+    assert_eq!(
+        request(
+            &app,
+            "PUT",
+            &format!("/api/connections/{}", saved["id"].as_str().unwrap()),
+            Some(forged),
+            Some(&cookie)
+        )
+        .await
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    let stored = diffrook::db::object(&state.db, "connections", saved["id"].as_str().unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(stored.get("is_admin").is_none());
+    // Historical objects must also be blocked at the moment of use.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let legacy = json!({"id":"legacy","name":"legacy","kind":"openai","default_model":"test",
+        "base_url":format!("http://{}", listener.local_addr().unwrap()), "created_at":"now","updated_at":"now"});
+    diffrook::db::save_object(&state.db, "providers", &legacy)
+        .await
+        .unwrap();
+    let (_, result, _) = request(
+        &app,
+        "POST",
+        "/api/providers/legacy/test",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(result["ok"], false);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(50), listener.accept())
+            .await
+            .is_err()
+    );
+}

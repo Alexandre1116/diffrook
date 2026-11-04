@@ -14,15 +14,10 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/build/target \
     cargo build --locked --release && cp target/release/diffrook /diffrook
+RUN mkdir /runtime-data && chmod 700 /runtime-data
 
-FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 10001 diffrook \
-    && useradd --uid 10001 --gid diffrook --no-create-home --shell /usr/sbin/nologin diffrook \
-    && mkdir -p /data /app/web \
-    && chown diffrook:diffrook /data \
-    && chmod 700 /data
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
+COPY --from=server --chown=10001:10001 /runtime-data /data
 COPY --from=server /diffrook /usr/local/bin/diffrook
 COPY --from=web /build/web/dist /app/web
 COPY LICENSE /app/LICENSE
@@ -32,10 +27,10 @@ ENV DIFFROOK_DATA_DIR=/data \
     DIFFROOK_HOST=0.0.0.0 \
     DIFFROOK_PORT=8080 \
     RUST_LOG=diffrook=info,tower_http=warn
-USER diffrook
+USER 10001:10001
 WORKDIR /app
 VOLUME ["/data"]
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD curl --fail --silent http://127.0.0.1:8080/healthz || exit 1
+    CMD ["/usr/local/bin/diffrook", "--healthcheck"]
 ENTRYPOINT ["/usr/local/bin/diffrook"]

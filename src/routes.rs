@@ -166,7 +166,7 @@ async fn select_beta_plan(
             "individual" | "freelancer" | "teams"
         )
     {
-        return error(StatusCode::FORBIDDEN, "Free beta plans require a beta build without an active signed license and are limited to Individual, Freelancer and Teams");
+        return error(StatusCode::FORBIDDEN, "The free beta offer has ended. Self-hosted plans are Coming soon; existing signed licenses remain valid.");
     }
     if s.license
         .select_beta_plan(&s.db, &selection.edition)
@@ -231,6 +231,7 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 strf("base_url")
             };
             if !base.is_empty() {
+                crate::network::validate_url(base).map_err(|e| e.to_string())?;
                 let u = url::Url::parse(base).map_err(|_| "Invalid connection URL")?;
                 if !["http", "https"].contains(&u.scheme())
                     || u.username() != ""
@@ -262,6 +263,7 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 return Err("Unsupported token parameter".into());
             }
             if !strf("base_url").is_empty() {
+                crate::network::validate_url(strf("base_url")).map_err(|e| e.to_string())?;
                 let u = url::Url::parse(strf("base_url")).map_err(|_| "Invalid provider URL")?;
                 if !["http", "https"].contains(&u.scheme())
                     || u.username() != ""
@@ -279,6 +281,7 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
             }
             let raw = strf("url");
             if !raw.starts_with("enc:") {
+                crate::network::validate_url(raw).map_err(|e| e.to_string())?;
                 let u = url::Url::parse(raw).map_err(|_| "Notification URL is required")?;
                 if !["http", "https"].contains(&u.scheme())
                     || !u.username().is_empty()
@@ -333,6 +336,7 @@ fn validate(kind: &str, v: &Value) -> Result<(), String> {
                 {
                     let raw = n["url"].as_str().unwrap_or("");
                     if !raw.starts_with("enc:") {
+                        crate::network::validate_url(raw).map_err(|e| e.to_string())?;
                         let u = url::Url::parse(raw).map_err(|_| "Notification URL is required")?;
                         if !["http", "https"].contains(&u.scheme())
                             || !u.username().is_empty()
@@ -482,6 +486,10 @@ async fn object_write(
     if !v.is_object() {
         return error(StatusCode::BAD_REQUEST, "Expected a JSON object");
     }
+    v = match crate::input::sanitize(kind, v) {
+        Ok(v) => v,
+        Err(e) => return error(StatusCode::BAD_REQUEST, e),
+    };
     let is_create = id.is_none();
     let object_id = id.clone();
     if let Some(id) = id {

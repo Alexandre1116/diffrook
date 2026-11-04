@@ -1,3 +1,4 @@
+use crate::network::SafeSend;
 use anyhow::{anyhow, bail, Context, Result};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -32,7 +33,7 @@ pub async fn test_provider(provider: &Value, client: &reqwest::Client) -> Result
             if let Some(key) = secret(provider, "api_key") {
                 req = req.bearer_auth(key);
             }
-            req.send()
+            req.send_safe()
                 .await
                 .context("requesting OpenAI compatible models")?
         }
@@ -41,19 +42,21 @@ pub async fn test_provider(provider: &Value, client: &reqwest::Client) -> Result
                 provider
                     .get("base_url")
                     .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
                     .unwrap_or("http://host.docker.internal:11434"),
             );
             let mut req = client.get(format!("{base}/api/tags"));
             if let Some(key) = secret(provider, "api_key") {
                 req = req.bearer_auth(key);
             }
-            req.send().await.context("requesting Ollama tags")?
+            req.send_safe().await.context("requesting Ollama tags")?
         }
         "anthropic" => {
             let base = trim_slash(
                 provider
                     .get("base_url")
                     .and_then(Value::as_str)
+                    .filter(|s| !s.is_empty())
                     .unwrap_or("https://api.anthropic.com"),
             );
             let mut req = client
@@ -62,7 +65,9 @@ pub async fn test_provider(provider: &Value, client: &reqwest::Client) -> Result
             if let Some(key) = secret(provider, "api_key") {
                 req = req.header("x-api-key", key);
             }
-            req.send().await.context("requesting Anthropic models")?
+            req.send_safe()
+                .await
+                .context("requesting Anthropic models")?
         }
         other => bail!("unsupported provider kind: {other}"),
     };
@@ -137,7 +142,7 @@ pub async fn complete(
         }
         other => bail!("unsupported provider kind: {other}"),
     };
-    let response = request.send().await.context("sending model request")?;
+    let response = request.send_safe().await.context("sending model request")?;
     let status = response.status();
     let bytes = crate::network::read_body(response, 8 * 1024 * 1024).await?;
     let body: Value = serde_json::from_slice(&bytes).context("decoding model response")?;

@@ -77,7 +77,7 @@ pub(super) async fn identity(scm: &Scm) -> Result<String> {
     if cloud(scm) {
         let response = scm
             .request(reqwest::Method::GET, "/user")
-            .send()
+            .send_safe()
             .await
             .context("testing Bitbucket connection")?;
         let status = response.status();
@@ -91,7 +91,7 @@ pub(super) async fn identity(scm: &Scm) -> Result<String> {
     }
     let response = scm
         .request(reqwest::Method::GET, "/profile/recent/repos?limit=1")
-        .send()
+        .send_safe()
         .await
         .context("testing Bitbucket connection")?;
     let status = response.status();
@@ -567,7 +567,7 @@ pub(super) async fn commit_changes(
                 "application/x-www-form-urlencoded",
             )
             .body(form)
-            .send()
+            .send_safe()
             .await
             .context("committing Bitbucket files")?;
         let status = response.status();
@@ -697,6 +697,12 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_expands_short_hashes_follows_diff_redirect_and_commits_once() {
+        crate::network::with_private_mock(
+            cloud_expands_short_hashes_follows_diff_redirect_and_commits_once_inner(),
+        )
+        .await;
+    }
+    async fn cloud_expands_short_hashes_follows_diff_redirect_and_commits_once_inner() {
         let (a, b, c) = ("a".repeat(40), "b".repeat(40), "c".repeat(40));
         let r = "/2.0/repositories/acme/api";
         let (origin, server) = serve(vec![
@@ -774,6 +780,10 @@ mod tests {
 
     #[tokio::test]
     async fn cloud_basic_auth_and_foreign_links_are_refused() {
+        crate::network::with_private_mock(cloud_basic_auth_and_foreign_links_are_refused_inner())
+            .await;
+    }
+    async fn cloud_basic_auth_and_foreign_links_are_refused_inner() {
         let (origin, server) = serve(vec![ok(
             &json!({"values":[],"next":"https://elsewhere.example/2.0/repositories/acme/api/pullrequests?page=2"}).to_string(),
         )])
@@ -791,6 +801,12 @@ mod tests {
 
     #[tokio::test]
     async fn data_center_matches_exact_branch_and_chains_file_commits() {
+        crate::network::with_private_mock(
+            data_center_matches_exact_branch_and_chains_file_commits_inner(),
+        )
+        .await;
+    }
+    async fn data_center_matches_exact_branch_and_chains_file_commits_inner() {
         let (a, c, d) = ("a".repeat(40), "c".repeat(40), "d".repeat(40));
         let r = "/rest/api/latest/projects/ACME/repos/api";
         let branches = json!({"isLastPage":true,"values":[

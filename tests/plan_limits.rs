@@ -113,7 +113,7 @@ async fn individual_api_counts_disabled_automations_and_allows_edit_delete_and_r
         )
         .await
         .0,
-        StatusCode::FORBIDDEN
+        StatusCode::BAD_REQUEST
     );
     let status = call(&app, "GET", "/api/license", None, Some(&cookie))
         .await
@@ -152,6 +152,23 @@ async fn individual_api_counts_disabled_automations_and_allows_edit_delete_and_r
 async fn beta_plan_selection_requires_authentication_and_enforces_real_allowances() {
     let (dir, state, app, cookie, input) = fixture().await;
     if diffrook::licensing::catalog()["beta"]["enabled"] != true {
+        let catalog = diffrook::licensing::catalog();
+        assert_eq!(catalog["self_hosted_status"], "coming_soon");
+        assert_eq!(catalog["self_hosted_purchase_available"], false);
+        for edition in ["freelancer", "teams", "individual", "enterprise"] {
+            assert_eq!(
+                call(
+                    &app,
+                    "POST",
+                    "/api/license/beta-plan",
+                    Some(json!({"edition":edition})),
+                    Some(&cookie)
+                )
+                .await
+                .0,
+                StatusCode::FORBIDDEN
+            );
+        }
         assert_eq!(
             call(
                 &app,

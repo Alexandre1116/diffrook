@@ -15,6 +15,7 @@ export DIFFROOK_SETUP_TOKEN=smoke-setup-token
 export DIFFROOK_TEST_URL=http://127.0.0.1:18081
 export DIFFROOK_TEST_SETUP_TOKEN=smoke-setup-token
 export DIFFROOK_MOCK_ORIGIN=http://127.0.0.1:19091
+export DIFFROOK_OUTBOUND_PRIVATE_HOSTS=127.0.0.1
 pid=""
 stop_server() {
   if [[ -n "$pid" ]]; then

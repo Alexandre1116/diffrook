@@ -6,14 +6,11 @@ Diffrook uses a Rust service, a React web interface, and SQLite. The application
 
 The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
 
-This version is the **0.2.0-beta.3 self-hosted preview**. Cloud Hosting remains
-Coming soon and cannot be purchased or activated. See [release and upgrade
-instructions](docs/releases.md) before upgrading an older installation.
-
-> **Security audit pending.** Diffrook has not yet completed an independent
-> security audit. We are waiting for that audit; until it is finished, review
-> the [security scope](docs/sso-and-internet.md#verification-and-scope) before
-> connecting production repositories.
+This is **v1.0.0, the first official stable release**. All self-hosted and Cloud
+plans are Coming soon. The free Freelancer and Teams beta offer has ended;
+new plan selection and checkout are unavailable. Existing Individual usage
+rights and signed licences remain valid. Read [release and upgrade instructions](docs/releases.md)
+and the [security review and verification](docs/security.md) before upgrading.
 
 ## Run with Docker
 
@@ -82,6 +79,27 @@ docker compose start diffrook
 
 Use `docker volume ls` to find the actual Compose volume name. Keep backups private because they include the encryption key. Restore to an empty volume while the application is stopped and preserve file ownership.
 
+## Outbound network access
+
+Connections, AI providers and notification webhooks may contact public HTTP(S)
+destinations by default. Diffrook blocks private, loopback, link-local, metadata
+and reserved addresses, including IPv4 mapped into IPv6. Every request resolves
+DNS, rejects any non-public answer and pins the checked addresses for that
+connection. Automatic redirects and environment HTTP proxies are disabled.
+Existing saved integrations use the same checks when they run.
+
+For a private code host or local Ollama, the installation operator must set
+`DIFFROOK_OUTBOUND_PRIVATE_HOSTS` to exact, comma-separated hostnames or IPs.
+For example, `host.docker.internal,git.internal.example` permits those hosts
+to reach private addresses on any port. Wildcards and CIDR ranges are not
+supported. This setting grants network access to those hosts, so keep the
+list narrow. Docker Compose passes the setting from `.env`; restart the
+application after changing it. With an empty list, local Ollama is blocked.
+
+API object writes reject unknown fields, including fields inside automation
+settings and notifications. Editor response metadata is accepted for round
+trips but discarded; identifiers and timestamps are assigned by the server.
+
 ## Development
 
 Install a current stable Rust toolchain and Node.js 22 or later.
@@ -110,49 +128,9 @@ This is the first implementation. GitHub, GitLab, Bitbucket Cloud, Bitbucket Dat
 
 ## License
 
-Copyright 2026 Alexandre Ramos, Diogo Mariano, Guilherme Pereira and Diffrook contributors.
-Diffrook is maintained and licensed by Alexandre Ramos, Diogo Mariano and Guilherme Pereira.
-
-Diffrook is source-available under the [Diffrook Personal and Business License](LICENSE).
-The free Individual plan permits personal, noncommercial self-hosted use with
-**one user and three saved automations**, including disabled automations, on
-repositories owned by a personal account. Repositories owned by an organization,
-group or team workspace need Freelancer or above, and Diffrook checks this with
-the code host. Company,
-team, employment, freelance and other professional use requires a paid plan
-in stable releases. **During beta, Freelancer and Teams are free**, with their
-normal limits and commercial self-hosted use. Enterprise is excluded. Choose
-your free plan in Settings, without payment or a signed file. The beta offer
-does not grant a stable paid license or create automatic billing.
-The following prices are for the official release:
-
-| Self-hosted plan | Users | Saved automations | SSO | Price |
-| --- | ---: | ---: | :---: | ---: |
-| Individual | 1 | 3 | No | Free forever |
-| Freelancer | 1 | 10 | No | €5.99 / month |
-| Teams | Up to 10 | 20 per user | Yes | €9.99 / user / month |
-| Enterprise | 10+ | 20 per user, pooled across the company | Yes | Contact us |
-
-Prices are in EUR and exclude applicable tax. All self-hosted plans bring their own AI and infrastructure;
-there is no execution-based license charge. Previously issued Business licenses
-remain supported. New paid sales are disabled until legal and fiscal setup is
-complete. During beta, Settings activates Individual, Freelancer or Teams for free.
-
-**Cloud Hosting: Coming soon.** Planned hosted subscriptions use the same limits:
-
-| Cloud plan | Users | Saved automations | SSO | Price |
-| --- | ---: | ---: | :---: | ---: |
-| Individual | 1 | 3 | No | €5.99 / month |
-| Freelancer | 1 | 10 | No | €9.99 / month |
-| Teams | Up to 10 | 20 per user | Yes | €14.99 / user / month |
-| Enterprise | 10+ | 20 per user, pooled across the company | Yes | Contact us |
-
-Cloud can use your own AI key or managed Claude Sonnet 5.5 and Claude Opus 5.5,
-metered per million tokens at twice Anthropic's API list price. Cloud purchase, activation
-and managed AI billing are unavailable. Hosted subscriptions will have separate
-service terms. Third-party hosting or
-resale requires separate written authorization. See [plans and license installation](docs/licensing.md).
-
-These terms are not an OSI open-source license. Rights already granted for
-earlier CC BY-NC 4.0 material remain intact; its [original license](docs/licenses/CC-BY-NC-4.0.txt)
-is retained. Third-party dependencies keep their respective licenses.
+Diffrook is source-available under the [Personal and Business License](LICENSE).
+All self-hosted and Cloud plans are Coming soon. Prices and allowances in the
+catalog are previews. The free Freelancer and Teams beta offer has ended;
+v1.0.0 ignores stored beta selections and DIFFROOK_BETA_PLAN. Existing Individual
+usage rights and signed customer licences remain effective. Previously granted
+rights are not revoked. See [plans and licences](docs/licensing.md).

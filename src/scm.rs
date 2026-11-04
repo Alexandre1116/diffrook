@@ -1,3 +1,4 @@
+use crate::network::SafeSend;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -194,13 +195,13 @@ impl Scm {
         }
     }
     async fn send(&self, request: reqwest::RequestBuilder, what: &str) -> Result<Value> {
-        self.json(request.send().await.with_context(|| what.to_owned())?)
+        self.json(request.send_safe().await.with_context(|| what.to_owned())?)
             .await
     }
     async fn get_with_headers(&self, path: &str) -> Result<(Value, reqwest::header::HeaderMap)> {
         let response = self
             .request(reqwest::Method::GET, path)
-            .send()
+            .send_safe()
             .await
             .context("SCM GET failed")?;
         let headers = response.headers().clone();
@@ -219,7 +220,7 @@ impl Scm {
         let url = self.checked_absolute(url)?;
         self.json(
             self.authorize(self.client.get(url))
-                .send()
+                .send_safe()
                 .await
                 .context("SCM GET failed")?,
         )
@@ -234,7 +235,7 @@ impl Scm {
             let response = self
                 .authorize(self.client.get(&url))
                 .header(reqwest::header::ACCEPT, "*/*")
-                .send()
+                .send_safe()
                 .await
                 .context("SCM GET failed")?;
             let status = response.status();
@@ -258,7 +259,7 @@ impl Scm {
     async fn get(&self, path: &str) -> Result<Value> {
         self.json(
             self.request(reqwest::Method::GET, path)
-                .send()
+                .send_safe()
                 .await
                 .context("SCM GET failed")?,
         )
@@ -321,7 +322,7 @@ impl Scm {
                     .ok_or_else(|| anyhow!("repository must be owner/name"))?;
                 let response = self
                     .request(reqwest::Method::GET, &format!("/orgs/{}", segment(owner)?))
-                    .send()
+                    .send_safe()
                     .await
                     .context("SCM GET failed")?;
                 match response.status() {
@@ -461,7 +462,7 @@ impl Scm {
             .header(reqwest::header::ACCEPT, "application/vnd.github.v3.diff")
         };
         let diff_response = diff_request
-            .send()
+            .send_safe()
             .await
             .context("fetching pull request diff")?;
         let status = diff_response.status();
@@ -648,7 +649,7 @@ impl Scm {
                 &format!("/repos/{}/issues/{number}/comments", repo_path(repo)?),
             )
             .json(&json!({"body":body}))
-            .send()
+            .send_safe()
             .await
             .context("posting SCM comment")?,
         )
@@ -665,7 +666,7 @@ impl Scm {
                 &format!("/repos/{}/git/refs", repo_path(repo)?),
             )
             .json(&json!({"ref":format!("refs/heads/{name}"),"sha":sha}))
-            .send()
+            .send_safe()
             .await
             .context("creating SCM branch")?,
         )
@@ -685,7 +686,7 @@ impl Scm {
                     &format!("/repos/{}/branches", repo_path(repo)?),
                 )
                 .json(&json!({"new_branch_name":name,"old_ref_name":old_ref}))
-                .send()
+                .send_safe()
                 .await
                 .context("creating Forgejo branch")?,
             )
@@ -782,7 +783,7 @@ impl Scm {
                         &format!("/repos/{}/contents", repo_path(repo)?),
                     )
                     .json(&json!({"branch":branch,"message":message,"files":files}))
-                    .send()
+                    .send_safe()
                     .await
                     .context("committing Forgejo files")?,
                 )
@@ -828,7 +829,7 @@ impl Scm {
                     &format!("/repos/{}/git/trees", repo_path(repo)?),
                 )
                 .json(&json!({"base_tree":base_tree,"tree":tree}))
-                .send()
+                .send_safe()
                 .await
                 .context("creating SCM tree")?,
             )
@@ -844,7 +845,7 @@ impl Scm {
                     &format!("/repos/{}/git/commits", repo_path(repo)?),
                 )
                 .json(&json!({"message":message,"tree":tree_sha,"parents":[base]}))
-                .send()
+                .send_safe()
                 .await
                 .context("creating SCM commit")?,
             )
@@ -863,7 +864,7 @@ impl Scm {
                 ),
             )
             .json(&json!({"sha":commit_sha,"force":false}))
-            .send()
+            .send_safe()
             .await
             .context("updating SCM branch")?,
         )
@@ -894,7 +895,7 @@ impl Scm {
                 &format!("/repos/{}/pulls", repo_path(repo)?),
             )
             .json(&json!({"title":title,"body":body,"head":head,"base":base}))
-            .send()
+            .send_safe()
             .await
             .context("creating pull request")?,
         )
@@ -940,7 +941,7 @@ pub async fn test_connection(connection: &Value, client: &reqwest::Client) -> Re
     }
     let response = scm
         .request(reqwest::Method::GET, "/user")
-        .send()
+        .send_safe()
         .await
         .context("testing SCM connection")?;
     let status = response.status();
@@ -1184,6 +1185,12 @@ mod tests {
     }
     #[tokio::test]
     async fn every_host_reports_organization_owned_repositories() {
+        crate::network::with_private_mock(
+            every_host_reports_organization_owned_repositories_inner(),
+        )
+        .await;
+    }
+    async fn every_host_reports_organization_owned_repositories_inner() {
         use test_server::{client, ok, serve, Reply};
         let not_found = || Reply {
             status: "404 Not Found",
@@ -1250,6 +1257,9 @@ mod tests {
     }
     #[tokio::test]
     async fn forgejo_uses_native_branch_and_contents_endpoints() {
+        crate::network::with_private_mock(forgejo_uses_native_branch_and_contents_endpoints_inner()).await;
+    }
+    async fn forgejo_uses_native_branch_and_contents_endpoints_inner() {
         use tokio::{
             io::{AsyncReadExt, AsyncWriteExt},
             net::TcpListener,

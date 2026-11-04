@@ -371,6 +371,9 @@ mod tests {
 
     #[tokio::test]
     async fn review_and_fix_flow_uses_gitlab_endpoints() {
+        crate::network::with_private_mock(review_and_fix_flow_uses_gitlab_endpoints_inner()).await;
+    }
+    async fn review_and_fix_flow_uses_gitlab_endpoints_inner() {
         let (a, c) = ("a".repeat(40), "c".repeat(40));
         let p = "/api/v4/projects/acme%2Fplatform%2Fapi";
         let (origin, server) = serve(vec![

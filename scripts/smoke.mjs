@@ -212,19 +212,14 @@ try {
     assert.ok(!traffic.some(t => t.path.startsWith('/repos/bigco/platform/')), 'Refused runs must not read repository content');
     await api(`/api/automations/${a.id}`, 'DELETE');
   });
-  await check('Free beta plans activate without payment and exclude Enterprise', async () => {
-    if ((await api('/api/plans')).beta.enabled !== true) {
-      await api('/api/license/beta-plan', 'POST', { edition: 'teams' }, { status: 403 });
-      return;
+  await check('Official release ends free beta activation and lists all plans as Coming soon', async () => {
+    const catalog = await api('/api/plans');
+    assert.equal(catalog.beta.enabled, false);
+    assert.equal(catalog.self_hosted_status, 'coming_soon');
+    assert.equal(catalog.self_hosted_purchase_available, false);
+    for (const edition of ['individual', 'freelancer', 'teams', 'enterprise']) {
+      await api('/api/license/beta-plan', 'POST', { edition }, { status: 403 });
     }
-    await api('/api/license/beta-plan', 'POST', { edition: 'enterprise' }, { status: 403 });
-    for (const [edition, users, automations, sso] of [['freelancer', 1, 10, false], ['teams', 10, 200, true]]) {
-      const status = await api('/api/license/beta-plan', 'POST', { edition });
-      assert.equal(status.edition, edition); assert.equal(status.license_status, 'beta_free');
-      assert.deepEqual(status.limits, { users, automations }); assert.equal(status.features.sso, sso);
-      assert.equal(status.commercial_use, true);
-    }
-    await api('/api/license/beta-plan', 'POST', { edition: 'individual' });
   });
   await check('Forgejo review uses the Forgejo diff endpoint', async () => {
     const a = await api('/api/automations', 'POST', automation(forgejo.id, provider.id, { name: 'Forgejo review' }));

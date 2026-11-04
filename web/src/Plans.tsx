@@ -11,6 +11,7 @@ type Plan = {
 };
 export type PlanCatalog = {
   currency: string; self_hosted: Plan[];
+  self_hosted_status: string; self_hosted_purchase_available: boolean;
   beta?: { enabled: boolean; free_self_hosted_plans: string[]; commercial_use_plans: string[]; stable_requires_paid_license: boolean };
   self_hosted_automation_pack: { automations: number; monthly_eur: number | null; annual_eur: number | null };
   cloud: {
@@ -36,6 +37,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   const [period, setPeriod] = useState<"monthly" | "annual">("monthly");
   const [seats, setSeats] = useState<Record<string, string>>({});
   const cloud = hosting === "cloud";
+  const comingSoon = cloud || catalog.self_hosted_status === "coming_soon";
   const beta = catalog.beta?.enabled === true;
   const [changingPlan, setChangingPlan] = useState(false);
   const chooseBetaPlan = async (id: string) => {
@@ -54,7 +56,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   };
   const prepareRequest = (plan: Plan) => {
     const price = plan[`${period}_eur`];
-    if (beta || cloud || plan.free_forever || price == null || (plan.per_user && !validSeats(plan))) return;
+    if (comingSoon || beta || cloud || plan.free_forever || price == null || (plan.per_user && !validSeats(plan))) return;
     const users = plan.per_user ? seatCount(plan) : plan.users!;
     const request = {
       request_version: 1, hosting: "self_hosted", installation_id: installationId,
@@ -69,7 +71,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   };
   return <section className="plan-catalog" aria-label="Plans and pricing">
     <div className="plan-catalog-head">
-      <div><h2>Plans and pricing</h2><p>{beta ? "Individual, Freelancer and Teams are free during beta. Enterprise is excluded." : "Choose the allowance for your installation. Prices exclude applicable tax."}</p></div>
+      <div><h2>Plans and pricing</h2><p>All self-hosted and Cloud plans are Coming soon. Prices and allowances are previews.</p></div>
       <div className="plan-switches">
         <div className="plan-toggle" role="group" aria-label="Hosting">
           <button type="button" aria-pressed={!cloud} onClick={() => setHosting("self_hosted")}>Self-hosted</button>
@@ -81,7 +83,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
         </div>}
       </div>
     </div>
-    <p className="plan-explainer">{cloud
+    <p className="plan-explainer">{comingSoon ? "Coming soon. New plan selection, purchases and license requests are unavailable. The free Freelancer and Teams beta offer has ended. Existing signed licenses remain valid." : cloud
       ? "Coming soon. Preview prices for hosting, backups and managed updates. AI usage is billed separately. Purchases and activation are unavailable."
       : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "Run Diffrook on your server with your own AI provider or local model. Paid licenses renew monthly or annually; executions have no license quota."}</p>
     <div className="plan-grid">{plans.map(plan => {
@@ -94,7 +96,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
       const freeBeta = !cloud && beta && catalog.beta!.free_self_hosted_plans.includes(plan.id);
       const excludedBeta = !cloud && beta && !freeBeta;
       return <article className={`panel-card plan-card${current ? " current-plan" : ""}`} key={plan.id}>
-        <div className="plan-card-heading"><h3>{plan.name}</h3>{current && <span className="plan-badge">Current plan</span>}{cloud && <span className="plan-badge">Coming soon</span>}</div>
+        <div className="plan-card-heading"><h3>{plan.name}</h3>{current && <span className="plan-badge">Current allowance</span>}{comingSoon && <span className="plan-badge">Coming soon</span>}</div>
         <div className="plan-price">{plan.free_forever || freeBeta ? "Free" : excludedBeta ? "Coming soon" : contact ? "Contact us" : money(amount!)}{freeBeta && !plan.free_forever ? <small> during beta</small> : !plan.free_forever && !excludedBeta && !contact && <small>/{perUser ? "user/" : ""}{period === "annual" ? "year" : "month"}</small>}</div>
         <p className="plan-use">{plan.free_forever ? "Free forever for personal use" : plan.commercial_use ? "Professional and commercial use" : "Personal, noncommercial use"}</p>
         <ul className="plan-features">
@@ -109,7 +111,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
           {validSeats(plan) ? <p className="plan-total">{money(total(amount!, users))}/{period === "annual" ? "year" : "month"} · {automations} automations</p> : <p role="alert">Enter between {plan.min_users ?? 1} and {plan.users} users.</p>}
         </div>}
         {perUser && contact && !excludedBeta && <p className="plan-use">Larger deployments and automation packs are priced by arrangement.</p>}
-        <div className="plan-card-action">{cloud
+        <div className="plan-card-action">{comingSoon
           ? <button className="btn secondary full" type="button" disabled>Coming soon</button>
           : freeBeta ? <button className="btn secondary full" type="button" disabled={current || changingPlan || !selectBetaPlan} onClick={() => void chooseBetaPlan(plan.id)}>{current ? "Current beta plan" : changingPlan ? "Applying plan..." : "Use free during beta"}</button>
           : excludedBeta ? <button className="btn secondary full" type="button" disabled>Not included in free beta</button>
@@ -125,6 +127,6 @@ export default function Plans({ catalog, edition, installationId, notice, select
       <div className="plan-table-wrap"><table><caption>Proposed rates per {catalog.cloud.ai.token_unit.toLocaleString()} tokens</caption><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody>{catalog.cloud.ai.models.map(model => <tr key={model.id}><th scope="row">{model.name}</th><td>{money(model.input_eur)}</td><td>{money(model.output_eur)}</td></tr>)}</tbody></table></div>
       <p>Cache will have separate rates. Planned controls include a monthly AI budget, alerts and a stop at the budget limit.</p>
       <p>Additional {catalog.cloud.execution_pack.executions.toLocaleString()} executions: {money(catalog.cloud.execution_pack.monthly_eur)}, with your approval, plus AI usage. Cloud limits will be validated before launch. Dedicated hosting and availability commitments require a separate quote.</p>
-    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "Download a request for the Diffrook team. Payment and renewal are arranged directly; the request does not activate a plan. Install the signed license for this installation ID."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
+    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "All plans are Coming soon. New requests, purchases and free beta activation are unavailable. Existing Individual usage rights and signed licenses are unchanged."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
   </section>;
 }

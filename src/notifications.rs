@@ -1,3 +1,4 @@
+use crate::network::SafeSend;
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 
@@ -12,10 +13,10 @@ pub async fn send(notification: &Value, message: &str, client: &reqwest::Client)
         .filter(|s| !s.is_empty())
         .ok_or_else(|| anyhow::anyhow!("notification is missing url"))?;
     let response = match kind {
-        "discord" => client.post(url).json(&json!({"content":bounded(message,1900),"allowed_mentions":{"parse":[]}})).send().await,
-        "slack" => client.post(url).json(&json!({"text":bounded(message,35000)})).send().await,
-        "teams" => client.post(url).json(&json!({"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"Diffrook review","weight":"Bolder"},{"type":"TextBlock","text":bounded(message,20000),"wrap":true}]}}]})).send().await,
-        "webhook" => client.post(url).json(&json!({"text":bounded(message,28000)})).send().await,
+        "discord" => client.post(url).json(&json!({"content":bounded(message,1900),"allowed_mentions":{"parse":[]}})).send_safe().await,
+        "slack" => client.post(url).json(&json!({"text":bounded(message,35000)})).send_safe().await,
+        "teams" => client.post(url).json(&json!({"type":"message","attachments":[{"contentType":"application/vnd.microsoft.card.adaptive","contentUrl":null,"content":{"$schema":"http://adaptivecards.io/schemas/adaptive-card.json","type":"AdaptiveCard","version":"1.2","body":[{"type":"TextBlock","text":"Diffrook review","weight":"Bolder"},{"type":"TextBlock","text":bounded(message,20000),"wrap":true}]}}]})).send_safe().await,
+        "webhook" => client.post(url).json(&json!({"text":bounded(message,28000)})).send_safe().await,
         _ => bail!("unsupported external notification kind: {kind}"),
     }.context("sending external notification")?;
     if !response.status().is_success() {

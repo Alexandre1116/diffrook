@@ -1,4 +1,29 @@
-# Self-hosted beta releases
+# Official releases and upgrades
+
+## 1.0.0, first official stable release
+
+This release ends the free Freelancer and Teams beta offer. All self-hosted and
+Cloud plans are Coming soon. New purchases and plan activation are unavailable.
+Existing licences and Individual usage rights are preserved; stored beta plan
+selections no longer grant paid-plan allowances. Over-quota saved data is retained.
+
+Security changes include outbound destination validation with DNS pinning, strict
+API input schemas, Vite 8.3.5, Tokio 1.54.1 and a Distroless runtime. The reported
+OIDC fixture exposure was not reproduced in either official beta.3 binary.
+Read [security verification](security.md) for evidence, exceptions and limitations.
+
+Before upgrading, back up the complete stopped data volume. Configure exact hosts
+in DIFFROOK_OUTBOUND_PRIVATE_HOSTS for private code hosts or Ollama. Review SSO
+entitlements and local access before moving an SSO-only beta installation.
+
+```sh
+git fetch --tags
+git checkout v1.0.0
+docker compose up --build -d
+```
+
+The first stable release publishes verified Linux x86-64 and ARM64 update archives.
+The previous beta notes below are historical and do not offer current free plans.
 
 ## 0.2.0-beta.3
 

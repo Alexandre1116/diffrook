@@ -2,6 +2,7 @@ pub mod auth;
 pub mod core;
 pub mod db;
 pub mod engine;
+mod input;
 pub mod licensing;
 pub mod network;
 pub mod notifications;
