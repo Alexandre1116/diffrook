@@ -212,10 +212,12 @@ try {
     assert.ok(!traffic.some(t => t.path.startsWith('/repos/bigco/platform/')), 'Refused runs must not read repository content');
     await api(`/api/automations/${a.id}`, 'DELETE');
   });
-  await check('Official release ends free beta activation and lists all plans as Coming soon', async () => {
+  await check('Individual is free by default; paid plans and Cloud remain Coming soon', async () => {
     const catalog = await api('/api/plans');
     assert.equal(catalog.beta.enabled, false);
-    assert.equal(catalog.self_hosted_status, 'coming_soon');
+    assert.equal(catalog.self_hosted_status, 'available');
+    assert.equal(catalog.default_self_hosted_plan, 'individual');
+    assert.equal(catalog.self_hosted[0].default, true);
     assert.equal(catalog.self_hosted_purchase_available, false);
     for (const edition of ['individual', 'freelancer', 'teams', 'enterprise']) {
       await api('/api/license/beta-plan', 'POST', { edition }, { status: 403 });

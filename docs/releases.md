@@ -2,8 +2,7 @@
 
 ## 1.0.0, first official stable release
 
-This release ends the free Freelancer and Teams beta offer. All self-hosted and
-Cloud plans are Coming soon. New purchases and plan activation are unavailable.
+This release ends the free Freelancer and Teams beta offer. The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. New purchases and paid-plan activation are unavailable.
 Existing licences and Individual usage rights are preserved; stored beta plan
 selections no longer grant paid-plan allowances. Over-quota saved data is retained.
 

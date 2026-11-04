@@ -3,6 +3,7 @@ import { Check, ExternalLink } from "lucide-react";
 import "./plans.css";
 
 type Plan = {
+  status?: string; default?: boolean;
   id: string; name: string; users: number | null; automations: number | null;
   min_users?: number; automations_per_user?: number; sso: boolean;
   commercial_use: boolean; monthly_eur: number | null; annual_eur: number | null;
@@ -37,7 +38,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   const [period, setPeriod] = useState<"monthly" | "annual">("monthly");
   const [seats, setSeats] = useState<Record<string, string>>({});
   const cloud = hosting === "cloud";
-  const comingSoon = cloud || catalog.self_hosted_status === "coming_soon";
+  const comingSoon = cloud;
   const beta = catalog.beta?.enabled === true;
   const [changingPlan, setChangingPlan] = useState(false);
   const chooseBetaPlan = async (id: string) => {
@@ -56,7 +57,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   };
   const prepareRequest = (plan: Plan) => {
     const price = plan[`${period}_eur`];
-    if (comingSoon || beta || cloud || plan.free_forever || price == null || (plan.per_user && !validSeats(plan))) return;
+    if (plan.status !== "available" || beta || cloud || plan.free_forever || price == null || (plan.per_user && !validSeats(plan))) return;
     const users = plan.per_user ? seatCount(plan) : plan.users!;
     const request = {
       request_version: 1, hosting: "self_hosted", installation_id: installationId,
@@ -71,7 +72,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
   };
   return <section className="plan-catalog" aria-label="Plans and pricing">
     <div className="plan-catalog-head">
-      <div><h2>Plans and pricing</h2><p>All self-hosted and Cloud plans are Coming soon. Prices and allowances are previews.</p></div>
+      <div><h2>Plans and pricing</h2><p>The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon.</p></div>
       <div className="plan-switches">
         <div className="plan-toggle" role="group" aria-label="Hosting">
           <button type="button" aria-pressed={!cloud} onClick={() => setHosting("self_hosted")}>Self-hosted</button>
@@ -85,7 +86,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
     </div>
     <p className="plan-explainer">{comingSoon ? "Coming soon. New plan selection, purchases and license requests are unavailable. The free Freelancer and Teams beta offer has ended. Existing signed licenses remain valid." : cloud
       ? "Coming soon. Preview prices for hosting, backups and managed updates. AI usage is billed separately. Purchases and activation are unavailable."
-      : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "Run Diffrook on your server with your own AI provider or local model. Paid licenses renew monthly or annually; executions have no license quota."}</p>
+      : beta ? "Choose a free beta plan below. Freelancer and Teams permit professional and commercial use during beta. Stable releases require a paid license for those plans. No automatic billing; you provide hosting and AI." : "The self-hosted Individual plan is included by default, with 1 user and 3 automations. No payment or license file is required. Paid self-hosted plans remain Coming soon."}</p>
     <div className="plan-grid">{plans.map(plan => {
       const perUser = plan.per_user;
       const amount = plan[`${period}_eur`];
@@ -93,10 +94,11 @@ export default function Plans({ catalog, edition, installationId, notice, select
       const users = seatCount(plan);
       const automations = perUser ? users * plan.automations_per_user! : plan.automations;
       const current = !cloud && edition === plan.id;
+      const comingSoon = cloud || plan.status !== "available";
       const freeBeta = !cloud && beta && catalog.beta!.free_self_hosted_plans.includes(plan.id);
       const excludedBeta = !cloud && beta && !freeBeta;
       return <article className={`panel-card plan-card${current ? " current-plan" : ""}`} key={plan.id}>
-        <div className="plan-card-heading"><h3>{plan.name}</h3>{current && <span className="plan-badge">Current allowance</span>}{comingSoon && <span className="plan-badge">Coming soon</span>}</div>
+        <div className="plan-card-heading"><h3>{plan.name}</h3>{current && <span className="plan-badge">Current allowance</span>}{comingSoon ? <span className="plan-badge">Coming soon</span> : <span className="plan-badge">Available by default</span>}</div>
         <div className="plan-price">{plan.free_forever || freeBeta ? "Free" : excludedBeta ? "Coming soon" : contact ? "Contact us" : money(amount!)}{freeBeta && !plan.free_forever ? <small> during beta</small> : !plan.free_forever && !excludedBeta && !contact && <small>/{perUser ? "user/" : ""}{period === "annual" ? "year" : "month"}</small>}</div>
         <p className="plan-use">{plan.free_forever ? "Free forever for personal use" : plan.commercial_use ? "Professional and commercial use" : "Personal, noncommercial use"}</p>
         <ul className="plan-features">
@@ -115,7 +117,7 @@ export default function Plans({ catalog, edition, installationId, notice, select
           ? <button className="btn secondary full" type="button" disabled>Coming soon</button>
           : freeBeta ? <button className="btn secondary full" type="button" disabled={current || changingPlan || !selectBetaPlan} onClick={() => void chooseBetaPlan(plan.id)}>{current ? "Current beta plan" : changingPlan ? "Applying plan..." : "Use free during beta"}</button>
           : excludedBeta ? <button className="btn secondary full" type="button" disabled>Not included in free beta</button>
-          : plan.free_forever ? <span className="plan-free-note">No license fee · Personal repositories only</span>
+          : plan.free_forever ? <span className="plan-free-note">Included by default · No payment or license file required</span>
           : contact ? <a className="btn secondary full" href={sales}>Contact us</a>
           : <button className="btn secondary full" type="button" disabled={perUser && !validSeats(plan)} onClick={() => prepareRequest(plan)}>Prepare license request</button>}
         </div>
@@ -127,6 +129,6 @@ export default function Plans({ catalog, edition, installationId, notice, select
       <div className="plan-table-wrap"><table><caption>Proposed rates per {catalog.cloud.ai.token_unit.toLocaleString()} tokens</caption><thead><tr><th>Model</th><th>Input</th><th>Output</th></tr></thead><tbody>{catalog.cloud.ai.models.map(model => <tr key={model.id}><th scope="row">{model.name}</th><td>{money(model.input_eur)}</td><td>{money(model.output_eur)}</td></tr>)}</tbody></table></div>
       <p>Cache will have separate rates. Planned controls include a monthly AI budget, alerts and a stop at the budget limit.</p>
       <p>Additional {catalog.cloud.execution_pack.executions.toLocaleString()} executions: {money(catalog.cloud.execution_pack.monthly_eur)}, with your approval, plus AI usage. Cloud limits will be validated before launch. Dedicated hosting and availability commitments require a separate quote.</p>
-    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "All plans are Coming soon. New requests, purchases and free beta activation are unavailable. Existing Individual usage rights and signed licenses are unchanged."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
+    </div> : <p className="plan-explainer">{beta ? "The free beta offer does not include Enterprise or grant a paid license for stable releases. Switching to a lower allowance retains existing data and blocks additional creations above the limit." : "The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. New requests, purchases and free beta activation are unavailable. Existing Individual usage rights and signed licenses are unchanged."} <a className="text-btn" href={instructions} target="_blank" rel="noreferrer">License instructions <ExternalLink size={13} /></a></p>}
   </section>;
 }

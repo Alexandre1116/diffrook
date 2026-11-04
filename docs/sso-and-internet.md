@@ -165,7 +165,7 @@ appropriate to the company's private code.
 The November 2026 fixes, production signing-key verification and scoped dependency
 exceptions are documented in [security and release verification](security.md).
 The free beta offer has ended; stable SSO provisioning requires a valid signed
-Teams or Enterprise entitlement. All new self-hosted and Cloud plans are Coming soon.
+Teams or Enterprise entitlement. The self-hosted Individual plan is free and available by default. New paid self-hosted plans and all Cloud plans are Coming soon.
 
 The automated suite covers valid and invalid signed OIDC tokens, PKCE transmission,
 browser binding, expiry and concurrent replay; authorization and account identity;

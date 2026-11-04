@@ -2,14 +2,15 @@
   "currency": "EUR",
   "tax_included": false,
   "annual_months_charged": 10,
-  "self_hosted_status": "coming_soon",
+  "self_hosted_status": "available",
+  "default_self_hosted_plan": "individual",
   "self_hosted_purchase_available": false,
   "beta": {"enabled":false,"free_self_hosted_plans":[],"commercial_use_plans":[],"stable_requires_paid_license":true},
   "self_hosted": [
-    {"id":"individual","name":"Individual","users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":0,"annual_eur":0,"per_user":false,"free_forever":true},
-    {"id":"freelancer","name":"Freelancer","users":1,"automations":10,"sso":false,"commercial_use":true,"monthly_eur":5.99,"annual_eur":59.9,"per_user":false},
-    {"id":"teams","name":"Teams","users":10,"automations":200,"sso":true,"commercial_use":true,"monthly_eur":9.99,"annual_eur":99.9,"per_user":true,"min_users":1,"automations_per_user":20},
-    {"id":"enterprise","name":"Enterprise","users":null,"min_users":10,"automations":null,"automations_per_user":20,"sso":true,"commercial_use":true,"monthly_eur":null,"annual_eur":null,"per_user":true,"contact_sales":true}
+    {"id":"individual","name":"Individual","status":"available","default":true,"users":1,"automations":3,"sso":false,"commercial_use":false,"monthly_eur":0,"annual_eur":0,"per_user":false,"free_forever":true},
+    {"id":"freelancer","name":"Freelancer","status":"coming_soon","users":1,"automations":10,"sso":false,"commercial_use":true,"monthly_eur":5.99,"annual_eur":59.9,"per_user":false},
+    {"id":"teams","name":"Teams","status":"coming_soon","users":10,"automations":200,"sso":true,"commercial_use":true,"monthly_eur":9.99,"annual_eur":99.9,"per_user":true,"min_users":1,"automations_per_user":20},
+    {"id":"enterprise","name":"Enterprise","status":"coming_soon","users":null,"min_users":10,"automations":null,"automations_per_user":20,"sso":true,"commercial_use":true,"monthly_eur":null,"annual_eur":null,"per_user":true,"contact_sales":true}
   ],
   "self_hosted_automation_pack": {"enterprise_only":true,"automations":10,"monthly_eur":null,"annual_eur":null},
   "cloud": {

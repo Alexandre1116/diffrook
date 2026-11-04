@@ -1788,7 +1788,7 @@ function SettingsPage({
             {data.license.expires_at && <div className="settings-line"><span>Expires</span><b>{date(new Date(data.license.expires_at * 1000).toISOString())}</b></div>}
             <div className="settings-line"><span>Installation ID</span><code>{data.license.installation_id}</code></div>
             {data.license.over_limit && <p role="alert">Existing data exceeds this plan's limits. It is retained for editing, deletion and export. Additional creations are blocked at the applicable limit.</p>}
-            <p>{data.license.can_select_beta_plan ? "Disabled automations count. Select your free beta plan below; no signed file or payment is needed. Individual remains personal and noncommercial." : "Disabled automations count. All plans are Coming soon and the free beta offer has ended. Existing signed licenses remain supported."}</p>
+            <p>{data.license.can_select_beta_plan ? "Disabled automations count. Select your free beta plan below; no signed file or payment is needed. Individual remains personal and noncommercial." : "Disabled automations count. Individual is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. The free Freelancer and Teams beta offer has ended. Existing signed licenses remain supported."}</p>
             <a className="text-btn" href="https://github.com/Alexandre1116/diffrook/blob/main/docs/licensing.md" target="_blank" rel="noreferrer">License installation <ExternalLink size={14} /></a>
           </div>
         </section>}

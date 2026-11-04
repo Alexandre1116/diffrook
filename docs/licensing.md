@@ -2,9 +2,8 @@
 
 ## Availability in v1.0.0
 
-All Individual, Freelancer, Teams and Enterprise plans, both self-hosted and
-Cloud, are Coming soon. Catalog prices and allowances are previews. Checkout,
-new plan requests and free beta activation are unavailable.
+The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. Catalog prices and allowances are previews. Checkout,
+new paid-plan requests and free Freelancer/Teams beta activation are unavailable.
 
 The free Freelancer and Teams beta offer has ended. Stable releases ignore
 stored beta selections and DIFFROOK_BETA_PLAN. Requests to the beta activation

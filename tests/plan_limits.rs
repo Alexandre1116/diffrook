@@ -153,7 +153,17 @@ async fn beta_plan_selection_requires_authentication_and_enforces_real_allowance
     let (dir, state, app, cookie, input) = fixture().await;
     if diffrook::licensing::catalog()["beta"]["enabled"] != true {
         let catalog = diffrook::licensing::catalog();
-        assert_eq!(catalog["self_hosted_status"], "coming_soon");
+        assert_eq!(catalog["self_hosted_status"], "available");
+        assert_eq!(catalog["default_self_hosted_plan"], "individual");
+        assert_eq!(catalog["self_hosted"][0]["status"], "available");
+        assert_eq!(catalog["self_hosted"][0]["default"], true);
+        assert_eq!(
+            state.license.status(&state.db).await.unwrap()["edition"],
+            "individual"
+        );
+        for plan in catalog["self_hosted"].as_array().unwrap().iter().skip(1) {
+            assert_eq!(plan["status"], "coming_soon");
+        }
         assert_eq!(catalog["self_hosted_purchase_available"], false);
         for edition in ["freelancer", "teams", "individual", "enterprise"] {
             assert_eq!(

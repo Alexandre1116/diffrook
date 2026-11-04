@@ -166,7 +166,7 @@ async fn select_beta_plan(
             "individual" | "freelancer" | "teams"
         )
     {
-        return error(StatusCode::FORBIDDEN, "The free beta offer has ended. Self-hosted plans are Coming soon; existing signed licenses remain valid.");
+        return error(StatusCode::FORBIDDEN, "Individual is free and included by default. The free Freelancer and Teams beta offer has ended; paid plans are Coming soon. Existing signed licenses remain valid.");
     }
     if s.license
         .select_beta_plan(&s.db, &selection.edition)
