@@ -12,6 +12,9 @@ new plan selection and checkout are unavailable. Existing Individual usage
 rights and signed licences remain valid. Read [release and upgrade instructions](docs/releases.md)
 and the [security review and verification](docs/security.md) before upgrading.
 
+The November 2026 security audit covered the self-hosted version of Diffrook.
+Diffrook Cloud and its hosted infrastructure were outside the audit scope.
+
 ## Run with Docker
 
 ```sh

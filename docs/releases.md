@@ -12,6 +12,9 @@ API input schemas, Vite 8.3.5, Tokio 1.54.1 and a Distroless runtime. The report
 OIDC fixture exposure was not reproduced in either official beta.3 binary.
 Read [security verification](security.md) for evidence, exceptions and limitations.
 
+The November 2026 security audit covered the self-hosted version of Diffrook.
+Diffrook Cloud and its hosted infrastructure were outside the audit scope.
+
 Before upgrading, back up the complete stopped data volume. Configure exact hosts
 in DIFFROOK_OUTBOUND_PRIVATE_HOSTS for private code hosts or Ollama. Review SSO
 entitlements and local access before moving an SSO-only beta installation.

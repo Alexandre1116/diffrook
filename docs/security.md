@@ -1,5 +1,11 @@
 # Security and release verification
 
+## Audit scope
+
+The November 2026 security audit assessed Diffrook v0.2.0-beta.3 in a self-hosted
+deployment. Diffrook Cloud and its hosted infrastructure were outside the audit
+scope. Version 1.0.0 contains the remediation and verification described below.
+
 ## November 2026 review
 
 The v1.0.0 source addresses the two confirmed application findings in the
