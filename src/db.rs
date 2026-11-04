@@ -94,13 +94,37 @@ pub async fn create_automation(
     value: &Value,
     limit: Option<u32>,
 ) -> anyhow::Result<bool> {
+    Ok(create_automation_with_onboarding(pool, value, limit)
+        .await?
+        .0)
+}
+
+/// Record the first creation in the same transaction as the quota check, so
+/// concurrent requests, deletion and restart cannot show the invitation twice.
+pub async fn create_automation_with_onboarding(
+    pool: &SqlitePool,
+    value: &Value,
+    limit: Option<u32>,
+) -> anyhow::Result<(bool, bool)> {
+    let mut tx = pool.begin_with("BEGIN IMMEDIATE").await?;
+    let previous_activity: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM objects WHERE kind='automations') OR EXISTS(SELECT 1 FROM runs)",
+    ).fetch_one(&mut *tx).await?;
     // A single write statement serializes competing creations in SQLite.
-    Ok(sqlx::query("INSERT INTO objects(kind,id,body,created_at,updated_at) SELECT 'automations',?,?,?,? WHERE (? IS NULL OR (SELECT COUNT(*) FROM objects WHERE kind='automations') < ?)")
+    let created = sqlx::query("INSERT INTO objects(kind,id,body,created_at,updated_at) SELECT 'automations',?,?,?,? WHERE (? IS NULL OR (SELECT COUNT(*) FROM objects WHERE kind='automations') < ?)")
         .bind(value["id"].as_str().context("object id missing")?)
         .bind(serde_json::to_string(value)?)
         .bind(value["created_at"].as_str().context("created_at missing")?)
         .bind(value["updated_at"].as_str().context("updated_at missing")?)
-        .bind(limit.map(i64::from)).bind(limit.map(i64::from)).execute(pool).await?.rows_affected() == 1)
+        .bind(limit.map(i64::from)).bind(limit.map(i64::from)).execute(&mut *tx).await?.rows_affected() == 1;
+    let first_creation = if created {
+        sqlx::query("INSERT OR IGNORE INTO app_settings(key,value) VALUES('onboarding.first_automation_created','1')")
+            .execute(&mut *tx).await?.rows_affected() == 1
+    } else {
+        false
+    };
+    tx.commit().await?;
+    Ok((created, first_creation && !previous_activity))
 }
 
 pub async fn update_automation(pool: &SqlitePool, value: &Value) -> anyhow::Result<bool> {

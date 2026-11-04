@@ -80,6 +80,116 @@ async fn fixture() -> (
     (dir, state, app, cookie, automation)
 }
 
+async fn write_with_headers(
+    app: &axum::Router,
+    cookie: &str,
+    method: &str,
+    path: &str,
+    body: &Value,
+) -> axum::response::Response {
+    app.clone()
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .header("content-type", "application/json")
+                .header("x-diffrook-request", "1")
+                .header("cookie", cookie)
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn star_invitation_only_follows_the_first_successful_creation_and_survives_restart() {
+    let (dir, state, app, cookie, input) = fixture().await;
+    let failed = write_with_headers(&app, &cookie, "POST", "/api/automations", &json!({})).await;
+    assert_eq!(failed.status(), StatusCode::BAD_REQUEST);
+    assert!(!failed.headers().contains_key("x-diffrook-star-prompt"));
+    let first = write_with_headers(&app, &cookie, "POST", "/api/automations", &input).await;
+    assert_eq!(first.status(), StatusCode::OK);
+    assert_eq!(first.headers()["x-diffrook-star-prompt"], "1");
+    let saved: Value =
+        serde_json::from_slice(&first.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    let path = format!("/api/automations/{}", saved["id"].as_str().unwrap());
+    let edited = write_with_headers(&app, &cookie, "PUT", &path, &saved).await;
+    assert_eq!(edited.status(), StatusCode::OK);
+    assert!(!edited.headers().contains_key("x-diffrook-star-prompt"));
+    let next = write_with_headers(&app, &cookie, "POST", "/api/automations", &input).await;
+    assert_eq!(next.status(), StatusCode::OK);
+    assert!(!next.headers().contains_key("x-diffrook-star-prompt"));
+    for object in diffrook::db::objects(&state.db, "automations")
+        .await
+        .unwrap()
+    {
+        diffrook::db::delete_object(&state.db, "automations", object["id"].as_str().unwrap())
+            .await
+            .unwrap();
+    }
+    let reloaded = diffrook::core::AppState::with_security(dir.path(), Default::default())
+        .await
+        .unwrap();
+    let after_restart = write_with_headers(
+        &diffrook::routes::router(reloaded),
+        &cookie,
+        "POST",
+        "/api/automations",
+        &input,
+    )
+    .await;
+    assert_eq!(after_restart.status(), StatusCode::OK);
+    assert!(!after_restart
+        .headers()
+        .contains_key("x-diffrook-star-prompt"));
+}
+
+#[tokio::test]
+async fn concurrent_creations_offer_exactly_one_invitation_and_preserve_the_quota() {
+    let (_dir, state, _app, _cookie, _) = fixture().await;
+    let rejected = json!({"id":"rejected","created_at":"now","updated_at":"now"});
+    assert_eq!(
+        diffrook::db::create_automation_with_onboarding(&state.db, &rejected, Some(0))
+            .await
+            .unwrap(),
+        (false, false)
+    );
+    let mut tasks = Vec::new();
+    for n in 0..12 {
+        let pool = state.db.clone();
+        tasks.push(tokio::spawn(async move {
+            let value = json!({"id":format!("parallel-{n}"),"created_at":"now","updated_at":"now"});
+            diffrook::db::create_automation_with_onboarding(&pool, &value, Some(3))
+                .await
+                .unwrap()
+        }));
+    }
+    let (mut created, mut invited) = (0, 0);
+    for task in tasks {
+        let (saved, prompt) = task.await.unwrap();
+        created += usize::from(saved);
+        invited += usize::from(prompt);
+    }
+    assert_eq!((created, invited), (3, 1));
+}
+
+#[tokio::test]
+async fn existing_installations_do_not_receive_a_first_creation_invitation() {
+    let (_dir, state, _app, _cookie, _) = fixture().await;
+    let legacy = json!({"id":"legacy","created_at":"now","updated_at":"now"});
+    diffrook::db::save_object(&state.db, "automations", &legacy)
+        .await
+        .unwrap();
+    let new = json!({"id":"new","created_at":"now","updated_at":"now"});
+    assert_eq!(
+        diffrook::db::create_automation_with_onboarding(&state.db, &new, None)
+            .await
+            .unwrap(),
+        (true, false)
+    );
+}
+
 #[tokio::test]
 async fn individual_api_counts_disabled_automations_and_allows_edit_delete_and_replacement() {
     let (_dir, state, app, cookie, input) = fixture().await;

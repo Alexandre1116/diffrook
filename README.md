@@ -57,6 +57,10 @@ Comment commands (`/diffrook`) need an allowed-actors list on every host except 
 
 Typical automations include reviewing a newly opened PR, auditing a branch every Monday at 09:00 in a selected timezone, and creating a fix PR for an issue carrying a selected label.
 
+After the first automation is saved, the app shows a one-time invitation to star
+Diffrook on GitHub. It is optional and can be dismissed. The app never stars a
+repository on your behalf.
+
 Each automation has its own model. Models must follow structured-output instructions for findings and file changes. Provider compatibility and review quality depend on the configured model. The application never treats model output as permission to enable a write action.
 
 ## Reviews and fixes

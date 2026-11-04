@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Plans, { type PlanCatalog } from "./Plans";
 import {
   Activity,
@@ -70,6 +70,7 @@ async function api<T = any>(
   path: string,
   method = "GET",
   body?: unknown,
+  onSuccess?: (response: Response) => void,
 ): Promise<T> {
   const res = await fetch(`/api${path}`, {
     method,
@@ -83,6 +84,7 @@ async function api<T = any>(
   const data =
     res.status === 204 ? undefined : await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || `Request failed (${res.status})`);
+  onSuccess?.(res);
   return data as T;
 }
 const emptyTrigger = {
@@ -243,6 +245,7 @@ function App() {
   const [modal, setModal] = useState<{ kind: string; item?: Obj } | null>(null),
     [detail, setDetail] = useState<Obj | null>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
+  const [showStarPrompt, setShowStarPrompt] = useState(false);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
@@ -334,8 +337,13 @@ function App() {
   const mutate = async (path: string, method: string, body?: Obj) => {
     setError("");
     try {
-      await api(path, method, body);
+      let firstAutomation = false;
+      await api(path, method, body, response => {
+        firstAutomation = path === "/automations" && method === "POST"
+          && response.headers.get("x-diffrook-star-prompt") === "1";
+      });
       setModal(null);
+      if (firstAutomation) setShowStarPrompt(true);
       setNotice(
         method === "DELETE" ? "Deleted successfully" : "Saved successfully",
       );
@@ -796,6 +804,19 @@ function App() {
               cancel={() => setModal(null)}
             />
           )}
+        </Modal>
+      )}
+      {showStarPrompt && (
+        <Modal title="Your first automation is ready" close={() => setShowStarPrompt(false)}>
+          <div className="form-stack">
+            <p>If Diffrook is useful to you, please consider giving the project a star on GitHub.</p>
+            <div className="form-actions">
+              <button className="btn secondary" type="button" autoFocus onClick={() => setShowStarPrompt(false)}>Not now</button>
+              <a className="btn primary" href="https://github.com/Alexandre1116/diffrook" target="_blank" rel="noopener noreferrer" onClick={() => setShowStarPrompt(false)}>
+                <Github size={17} /> Star on GitHub <ExternalLink size={15} />
+              </a>
+            </div>
+          </div>
         </Modal>
       )}
       {detail && <RunDetail run={detail} close={() => setDetail(null)} />}
@@ -1873,6 +1894,7 @@ function Modal({
   wide?: boolean;
   children: React.ReactNode;
 }) {
+  const titleId = useId();
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") close();
@@ -1891,13 +1913,14 @@ function Modal({
         className={`modal ${wide ? "wide" : ""}`}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={titleId}
       >
         <div className="modal-header">
           <div>
             <div className="eyebrow">DIFFROOK CONFIGURATION</div>
-            <h2>{title}</h2>
+            <h2 id={titleId}>{title}</h2>
           </div>
-          <button className="icon-btn" onClick={close}>
+          <button className="icon-btn" aria-label="Close dialog" onClick={close}>
             <X size={19} />
           </button>
         </div>

@@ -642,9 +642,15 @@ async fn object_write(
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
     let mut result = v.clone();
+    let mut show_star_prompt = false;
     if kind == "automations" {
         let saved = if is_create {
-            db::create_automation(&s.db, &v, s.license.limits().automations).await
+            db::create_automation_with_onboarding(&s.db, &v, s.license.limits().automations)
+                .await
+                .map(|(saved, first)| {
+                    show_star_prompt = first;
+                    saved
+                })
         } else {
             db::update_automation(&s.db, &v).await
         };
@@ -660,7 +666,14 @@ async fn object_write(
     if let Err(e) = s.mask(kind, &mut result) {
         return error(StatusCode::INTERNAL_SERVER_ERROR, e);
     }
-    Json(result).into_response()
+    let mut response = Json(result).into_response();
+    if show_star_prompt {
+        response.headers_mut().insert(
+            "x-diffrook-star-prompt",
+            axum::http::HeaderValue::from_static("1"),
+        );
+    }
+    response
 }
 /// First configured repository that its code host reports as organization
 /// owned. A failed lookup does not block saving: every run checks again and
