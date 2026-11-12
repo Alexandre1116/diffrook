@@ -450,6 +450,7 @@ function App() {
           ))}
         </nav>
         <div className="side-bottom">
+          <LegalLinks />
           <div className="side-status">
             <span className="live-dot" />
             Instance reachable<span className="version">v{status.version}</span>
@@ -928,6 +929,7 @@ function Auth({
           </button>
         </form>}
         {!localLogin && error && <div className="form-error" role="alert"><TriangleAlert size={16} />{error}</div>}
+        <LegalLinks />
         <div className="auth-foot">
           <ShieldCheck size={15} /> Your instance. Your repositories. Your
           rules.
@@ -3023,6 +3025,13 @@ function RunDetail({ run, close }: { run: Obj; close: () => void }) {
       )}
     </Modal>
   );
+}
+
+function LegalLinks() {
+  return <nav className="legal-links" aria-label="Legal">
+    <a href="/terms/" target="_blank" rel="noopener noreferrer">Terms of use</a>
+    <a href="/privacy/" target="_blank" rel="noopener noreferrer">Privacy policy</a>
+  </nav>;
 }
 
 export default App;
