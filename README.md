@@ -6,7 +6,7 @@ Diffrook uses a Rust service, a React web interface, and SQLite. The application
 
 The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
 
-This is **v1.0.0, the first official stable release**. The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. The free Freelancer and Teams beta offer has ended;
+This is **v1.0.1**, a patch release with public terms of use and a privacy policy. The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. The free Freelancer and Teams beta offer has ended;
 new paid-plan selection and checkout are unavailable. Existing Individual usage
 rights and signed licences remain valid. Read [release and upgrade instructions](docs/releases.md)
 and the [security review and verification](docs/security.md) before upgrading.

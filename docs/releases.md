@@ -1,5 +1,26 @@
 # Official releases and upgrades
 
+## 1.0.1
+
+- Public terms of use and privacy policy, bundled with the app and available
+  without signing in. Links appear on the login screen and in the sidebar.
+- Legal notices identify the three maintainers and describe self-hosted data,
+  integrations, essential cookies, licence administration and future services.
+- The free Individual plan is explicitly marked available by default.
+- An optional GitHub star prompt appears after the first automation.
+- Clarified that the November 2026 security audit covered self-hosted Diffrook.
+
+No database migration is introduced. Back up the stopped data volume before
+upgrading. Existing licences, data and plan limits remain unchanged.
+
+```sh
+git fetch --tags
+git checkout v1.0.1
+docker compose up --build -d
+```
+
+Linux x86-64 and ARM64 packages are validated by CI before publication.
+
 ## 1.0.0, first official stable release
 
 This release ends the free Freelancer and Teams beta offer. The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. New purchases and paid-plan activation are unavailable.
