@@ -1,3 +1,5 @@
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/alexandre1116)
+
 # Diffrook
 
 Self-hosted code review and repository automations for GitHub, GitLab, Bitbucket (Cloud and Data Center), Forgejo and Gitea. Choose when an automation runs, which model it uses, whether it reviews or writes a fix, and where it posts the result.
