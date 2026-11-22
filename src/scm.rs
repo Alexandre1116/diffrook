@@ -634,6 +634,20 @@ impl Scm {
         number: u64,
         body: &str,
     ) -> Result<()> {
+        if self.kind == Kind::GitHub && is_pull_request {
+            self.json(
+                self.request(
+                    reqwest::Method::POST,
+                    &format!("/repos/{}/pulls/{number}/reviews", repo_path(repo)?),
+                )
+                .json(&json!({"body": body, "event": "COMMENT"}))
+                .send_safe()
+                .await
+                .context("posting GitHub pull request review")?,
+            )
+            .await?;
+            return Ok(());
+        }
         match self.kind {
             Kind::GitLab => {
                 return gitlab::post_comment(self, repo, is_pull_request, number, body).await
