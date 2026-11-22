@@ -50,6 +50,7 @@ const mock = http.createServer(async (req, res) => {
   if (path === '/repos/acme/demo/pulls' && req.method === 'GET') return send([pr]);
   if (path === '/repos/acme/demo/issues' && req.method === 'GET') return send([{ number: 9, title: 'Division by zero', labels: [{ name: 'autofix' }], user: { login: 'developer' } }]);
   if (path === '/repos/acme/demo/issues/9') return send({ number: 9, title: 'Division by zero', body: 'Please return an error for a zero divisor.', user: { login: 'developer' }, labels: [{ name: 'autofix' }], html_url: 'https://example.invalid/acme/demo/issues/9' });
+  if (/\/pulls\/\d+\/reviews$/.test(path) && req.method === 'POST') return send({ id: 51, state: 'COMMENTED' }, 201);
   if (/\/issues\/\d+\/comments$/.test(path)) return send(req.method === 'GET' ? [] : { id: 50, html_url: 'https://example.invalid/comment/50' }, req.method === 'GET' ? 200 : 201);
   if (/\/collaborators\/[^/]+\/permission$/.test(path)) return send({ permission: 'write', user: { permissions: { push: true } } });
   if (path.startsWith('/repos/acme/demo/branches/') && req.method === 'GET') return send({ name: path.split('/branches/')[1], commit: { sha: branches.get(path.split('/branches/')[1]) || sha } });
@@ -178,7 +179,7 @@ try {
     const run = await waitForRun(queued.id);
     assert.equal(run.status, 'succeeded', run.error);
     assert.equal(run.output.findings[0].title, 'Guard a zero divisor');
-    assert.ok(traffic.some(t => t.method === 'POST' && t.path.endsWith('/issues/7/comments') && t.body.body.includes('Guard a zero divisor')));
+    assert.ok(traffic.some(t => t.method === 'POST' && t.path.endsWith('/pulls/7/reviews') && t.body.event === 'COMMENT' && t.body.body.includes('Guard a zero divisor')));
     const modelBody = JSON.stringify(traffic.findLast(t => t.path === '/v1/chat/completions').body);
     assert.ok(modelBody.includes('CHECK_AUTOMATION_INSTRUCTIONS_ARE_USED'));
     assert.ok(!modelBody.includes(token) && !modelBody.includes(modelKey) && !modelBody.includes('NEVER_SEND_THIS_SECRET'));

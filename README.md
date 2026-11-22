@@ -53,6 +53,8 @@ explicit administrator allowlist. SSO defaults to disabling password login.
 | Forgejo | Instance root | Access token with repository and issue scopes | `owner/repo` | Forgejo webhook, content type `application/json`, secret set |
 | Gitea | Instance root | Access token with repository and issue scopes | `owner/repo` | Gitea webhook, content type `application/json`, secret set |
 
+GitHub pull request reports are submitted as comment reviews under the account associated with the configured token. Use a dedicated Diffrook account if you want that name to appear as the reviewer; the token needs pull request write access.
+
 GitLab merge requests and Bitbucket pull requests are handled as pull requests. Bitbucket Data Center has no issue tracker, so issue automations are not available there. Bitbucket Cloud issues have no labels; their kind and component are used as labels for filters. Bitbucket sends one event for both new commits and pull request edits, so a review can also run after an edit.
 
 Comment commands (`/diffrook`) need an allowed-actors list on every host except GitHub, because only GitHub reports whether the commenter is a repository member.
