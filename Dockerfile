@@ -16,7 +16,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     cargo build --locked --release && cp target/release/diffrook /diffrook
 RUN mkdir /runtime-data && chmod 700 /runtime-data
 
-FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS runtime
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:cb87acc574abe719b6e5c547384defa2f7b1f24af9605d3f618cf852495d8be2 AS runtime
 COPY --from=server --chown=10001:10001 /runtime-data /data
 COPY --from=server /diffrook /usr/local/bin/diffrook
 COPY --from=web /build/web/dist /app/web
