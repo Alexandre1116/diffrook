@@ -20,17 +20,23 @@ const MAX_EXTRACTED: u64 = 300 * 1024 * 1024;
 
 pub fn start(state: AppState) {
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(900));
         loop {
-            if let Err(e) = refresh(&state).await {
-                tracing::warn!("release check failed: {e:#}");
-                let mut value = state.updates.write().await;
-                value["error"] = json!("GitHub release check failed");
-            }
-            if let Err(e) = install_latest_if_automatic(&state).await {
-                tracing::error!("automatic update failed: {e:#}");
-            }
-            interval.tick().await;
+            let wait = match refresh(&state).await {
+                Ok(()) => {
+                    if let Err(e) = install_latest_if_automatic(&state).await {
+                        tracing::error!("automatic update failed: {e:#}");
+                    }
+                    Duration::from_secs(900)
+                }
+                Err(e) => {
+                    tracing::warn!("release check failed: {e:#}");
+                    let mut value = state.updates.write().await;
+                    value["error"] = json!("GitHub release check failed");
+                    // Retry a failed GitHub call sooner without ever busy-looping.
+                    Duration::from_secs(60)
+                }
+            };
+            tokio::time::sleep(wait).await;
         }
     });
 }
@@ -342,13 +348,43 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
     Ok(final_path)
 }
 
+/// The release this channel should be offered: newest first, pre-releases only
+/// on the beta channel. Kept next to `automatic_release` so the UI and the
+/// installer agree on what counts as an update.
+fn offered_release(releases: &[Value], beta: bool) -> Option<&Value> {
+    releases
+        .iter()
+        .find(|r| r["newer"] == true && (beta || r["prerelease"] != true))
+}
+
+fn offer_value(release: Option<&Value>) -> Value {
+    match release {
+        Some(r) => json!({
+            "tag": r["tag"],
+            "version": r["version"],
+            "prerelease": r["prerelease"],
+            "supported": r["supported"],
+            "published_at": r["published_at"],
+            "url": r["url"],
+        }),
+        None => Value::Null,
+    }
+}
+
 pub async fn api(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(r) = crate::routes::guard(&state, &headers, false).await {
         return r;
     }
     let mut value = state.updates.read().await.clone();
+    let beta = channel(&state).await == "beta";
     value["policy"] = json!(policy(&state).await.unwrap_or_else(|| "manual".into()));
     value["channel"] = json!(channel(&state).await);
+    value["latest"] = offer_value(offered_release(
+        value["releases"]
+            .as_array()
+            .map_or(&[][..], |a| a.as_slice()),
+        beta,
+    ));
     Json(value).into_response()
 }
 
@@ -413,6 +449,32 @@ pub async fn set_channel(
             format!("Automatic update failed: {e:#}"),
         ),
     }
+}
+
+/// Runs a release check on demand so an administrator can confirm the GitHub
+/// release feed without waiting for the next scheduled pass.
+pub async fn check_now(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(r) = crate::routes::guard(&state, &headers, true).await {
+        return r;
+    }
+    if let Err(e) = refresh(&state).await {
+        return error(
+            StatusCode::BAD_GATEWAY,
+            format!("GitHub release check failed: {e:#}"),
+        );
+    }
+    let updates = state.updates.read().await.clone();
+    let beta = channel(&state).await == "beta";
+    Json(json!({
+        "ok": true,
+        "current_version": updates["current_version"],
+        "checked_at": updates["checked_at"],
+        "latest": offer_value(offered_release(
+            updates["releases"].as_array().map_or(&[][..], |a| a.as_slice()),
+            beta,
+        )),
+    }))
+    .into_response()
 }
 
 pub async fn apply(
@@ -573,6 +635,25 @@ mod tests {
         std::fs::write(&path, "invalid").unwrap();
         assert!(can_stage_update(dir.path()).is_err());
     }
+    #[test]
+    fn offered_release_follows_the_channel() {
+        let releases = vec![
+            json!({"tag":"v2.0.0-beta.1","version":"2.0.0-beta.1","newer":true,"prerelease":true,"supported":true}),
+            json!({"tag":"v1.9.0","version":"1.9.0","newer":true,"prerelease":false,"supported":true}),
+            json!({"tag":"v1.0.1","version":"1.0.1","newer":false,"prerelease":false,"supported":true}),
+        ];
+        assert_eq!(
+            offered_release(&releases, false).and_then(|r| r["tag"].as_str()),
+            Some("v1.9.0")
+        );
+        assert_eq!(
+            offered_release(&releases, true).and_then(|r| r["tag"].as_str()),
+            Some("v2.0.0-beta.1")
+        );
+        assert!(offered_release(&releases[2..], false).is_none());
+        assert_eq!(offer_value(None), Value::Null);
+    }
+
     #[test]
     fn automatic_updates_skip_prereleases_missing_metadata_and_failed_versions() {
         let releases = vec![

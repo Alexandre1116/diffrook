@@ -78,6 +78,24 @@ pub async fn test_provider(provider: &Value, client: &reqwest::Client) -> Result
     Ok(format!("Connected to {kind}; configured model is {model}"))
 }
 
+/// Tokens reported by the provider for one model call. Providers that omit
+/// usage metadata leave both sides at zero, so totals stay additive rather than
+/// pretending a number exists.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+}
+
+impl TokenUsage {
+    pub fn total(&self) -> u64 {
+        self.input + self.output
+    }
+    pub fn json(&self) -> Value {
+        json!({"input_tokens": self.input, "output_tokens": self.output})
+    }
+}
+
 pub async fn complete(
     provider: &Value,
     model: &str,
@@ -86,7 +104,7 @@ pub async fn complete(
     max_output_tokens: u32,
     timeout: Duration,
     client: &reqwest::Client,
-) -> Result<String> {
+) -> Result<(String, TokenUsage)> {
     if system.len().saturating_add(prompt.len()) > 180_000 {
         bail!("model request exceeds the 180000 character safety limit");
     }
@@ -171,7 +189,28 @@ pub async fn complete(
         _ => None,
     }
     .ok_or_else(|| anyhow!("provider response did not contain text"))?;
-    Ok(content.to_owned())
+    Ok((content.to_owned(), usage_for(kind, &body)))
+}
+
+/// Reads the token counters each provider returns. Ollama reports evaluation
+/// counts, Anthropic and OpenAI compatible endpoints report usage objects, and
+/// some OpenAI-compatible gateways use the Anthropic naming.
+pub fn usage_for(kind: &str, body: &Value) -> TokenUsage {
+    let number = |value: Option<&Value>| value.and_then(Value::as_u64).unwrap_or(0);
+    if kind == "ollama" {
+        return TokenUsage {
+            input: number(body.get("prompt_eval_count")),
+            output: number(body.get("eval_count")),
+        };
+    }
+    let usage = body.get("usage");
+    let pick = |primary: &str, secondary: &str| {
+        number(usage.and_then(|u| u.get(primary).or_else(|| u.get(secondary))))
+    };
+    TokenUsage {
+        input: pick("input_tokens", "prompt_tokens"),
+        output: pick("output_tokens", "completion_tokens"),
+    }
 }
 
 pub fn parse_json_object<T: serde::de::DeserializeOwned>(text: &str) -> Result<T> {
@@ -213,5 +252,26 @@ mod tests {
         let value: Value = parse_json_object("```json\n{\"findings\":[]}\n```").unwrap();
         assert!(value["findings"].is_array());
         assert!(parse_json_object::<Value>("Here you go: {\"ok\":true}").is_err());
+    }
+    #[test]
+    fn token_usage_follows_each_provider_naming() {
+        let openai = usage_for(
+            "openai",
+            &json!({"usage": {"prompt_tokens": 900, "completion_tokens": 120}}),
+        );
+        assert_eq!(openai.input, 900);
+        assert_eq!(openai.output, 120);
+        assert_eq!(openai.total(), 1020);
+        let anthropic = usage_for(
+            "anthropic",
+            &json!({"usage": {"input_tokens": 40, "output_tokens": 8}}),
+        );
+        assert_eq!((anthropic.input, anthropic.output), (40, 8));
+        let ollama = usage_for(
+            "ollama",
+            &json!({"prompt_eval_count": 700, "eval_count": 90}),
+        );
+        assert_eq!((ollama.input, ollama.output), (700, 90));
+        assert_eq!(usage_for("openai", &json!({})).total(), 0);
     }
 }

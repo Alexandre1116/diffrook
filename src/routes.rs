@@ -14,6 +14,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::Sha256;
 use sqlx::Row;
+use std::collections::HashSet;
 use std::time::Duration;
 
 pub fn router(state: AppState) -> Router {
@@ -42,6 +43,10 @@ pub fn router(state: AppState) -> Router {
             post(select_beta_plan).layer(DefaultBodyLimit::max(16 * 1024)),
         )
         .route("/api/updates", get(crate::updates::api))
+        .route(
+            "/api/updates/check",
+            axum::routing::post(crate::updates::check_now),
+        )
         .route(
             "/api/updates/policy",
             axum::routing::post(crate::updates::set_policy),
@@ -1190,10 +1195,6 @@ async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> Response {
             .collect(),
         Err(_) => vec![],
     };
-    let runs = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM runs")
-        .fetch_one(&s.db)
-        .await
-        .unwrap_or(0);
     let all: Vec<Value> = match sqlx::query_scalar::<_, String>("SELECT body FROM runs")
         .fetch_all(&s.db)
         .await
@@ -1204,15 +1205,145 @@ async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> Response {
             .collect(),
         Err(_) => vec![],
     };
-    let findings = all
-        .iter()
-        .map(|r| {
-            r["output"]["findings"]
-                .as_array()
-                .map_or(0, |x| x.len() as i64)
+    let metrics = run_metrics(&all);
+    let automations = autos.len();
+    let active = autos.iter().filter(|a| a["enabled"] == true).count();
+    let mut body = metrics;
+    body["automations"] = json!(automations);
+    body["active_automations"] = json!(active);
+    body["recent_runs"] = json!(recent);
+    Json(body).into_response()
+}
+
+/// One day of the activity chart.
+#[derive(Default)]
+struct DayMetrics {
+    completed: i64,
+    failed: i64,
+    findings: i64,
+    tokens: u64,
+}
+
+const CHART_DAYS: i64 = 7;
+
+/// Everything the overview shows, counted from the runs the instance already
+/// has, so the page reflects real work instead of static placeholders.
+fn run_metrics(runs: &[Value]) -> Value {
+    let today = chrono::Utc::now().date_naive();
+    let window_start = today - chrono::Duration::days(CHART_DAYS - 1);
+    let mut days: std::collections::BTreeMap<chrono::NaiveDate, DayMetrics> = (0..CHART_DAYS)
+        .map(|offset| {
+            (
+                window_start + chrono::Duration::days(offset),
+                DayMetrics::default(),
+            )
         })
-        .sum::<i64>();
-    Json(json!({"automations":autos.len(),"active_automations":autos.iter().filter(|a|a["enabled"]==true).count(),"runs":runs,"findings":findings,"recent_runs":recent})).into_response()
+        .collect();
+    let mut completed = 0i64;
+    let mut failed = 0i64;
+    let mut findings = 0i64;
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    let mut severities: std::collections::BTreeMap<String, i64> = Default::default();
+    let mut used_automations: HashSet<String> = Default::default();
+    let mut prs: HashSet<String> = Default::default();
+    let mut weekly_prs: HashSet<String> = Default::default();
+    for run in runs {
+        let status = run["status"].as_str().unwrap_or("");
+        if status == "completed" {
+            completed += 1;
+        } else if status == "failed" {
+            failed += 1;
+        }
+        if let Some(id) = run["automation_id"].as_str() {
+            used_automations.insert(id.to_owned());
+        }
+        if status == "completed"
+            && run["trigger"]["kind"].as_str() == Some("pull_request")
+            && run["trigger"]["number"].as_u64().is_some()
+        {
+            let key = format!(
+                "{}#{}",
+                run["trigger"]["repository"].as_str().unwrap_or(""),
+                run["trigger"]["number"].as_u64().unwrap_or(0)
+            );
+            prs.insert(key.clone());
+            let day = run["created_at"]
+                .as_str()
+                .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                .map(|v| v.date_naive());
+            if day.is_some_and(|d| d >= window_start) {
+                weekly_prs.insert(key);
+            }
+        }
+        if let Some(list) = run["output"]["findings"].as_array() {
+            findings += list.len() as i64;
+            for finding in list {
+                *severities
+                    .entry(finding["severity"].as_str().unwrap_or("info").to_owned())
+                    .or_default() += 1;
+            }
+        }
+        let usage = &run["output"]["usage"];
+        input_tokens = input_tokens.saturating_add(usage["input_tokens"].as_u64().unwrap_or(0));
+        output_tokens = output_tokens.saturating_add(usage["output_tokens"].as_u64().unwrap_or(0));
+        let Some(day) = run["created_at"]
+            .as_str()
+            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+            .map(|v| v.date_naive())
+        else {
+            continue;
+        };
+        let Some(bucket) = days.get_mut(&day) else {
+            continue;
+        };
+        if status == "completed" {
+            bucket.completed += 1;
+        } else if status == "failed" {
+            bucket.failed += 1;
+        }
+        bucket.findings += run["output"]["findings"]
+            .as_array()
+            .map_or(0, |x| x.len() as i64);
+        bucket.tokens += usage["input_tokens"]
+            .as_u64()
+            .unwrap_or(0)
+            .saturating_add(usage["output_tokens"].as_u64().unwrap_or(0));
+    }
+    let weekly: Vec<Value> = days
+        .iter()
+        .map(|(day, m)| {
+            json!({
+                "date": day.format("%Y-%m-%d").to_string(),
+                "completed": m.completed,
+                "failed": m.failed,
+                "findings": m.findings,
+                "tokens": m.tokens,
+            })
+        })
+        .collect();
+    let weekly_totals = weekly.iter().fold(
+        json!({"completed": 0, "failed": 0, "findings": 0, "tokens": 0}),
+        |mut acc, day| {
+            for key in ["completed", "failed", "findings", "tokens"] {
+                acc[key] = json!(acc[key].as_i64().unwrap_or(0) + day[key].as_i64().unwrap_or(0));
+            }
+            acc
+        },
+    );
+    json!({
+        "runs": runs.len(),
+        "completed_runs": completed,
+        "failed_runs": failed,
+        "automations_used": used_automations.len(),
+        "findings": findings,
+        "prs_analyzed": prs.len(),
+        "prs_last_7d": weekly_prs.len(),
+        "tokens": {"input": input_tokens, "output": output_tokens, "total": input_tokens + output_tokens},
+        "severities": severities,
+        "weekly": weekly,
+        "weekly_totals": weekly_totals,
+    })
 }
 
 async fn cancel_run(State(s): State<AppState>, Path(id): Path<String>, h: HeaderMap) -> Response {
@@ -1594,5 +1725,80 @@ mod tests {
         let recovered: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(recovered["status"], "failed");
         assert_eq!(recovered["error"], "Process restarted before run completed");
+    }
+
+    fn metric_run(status: &str, created: String, body: Value) -> Value {
+        json!({"status": status, "created_at": created, "output": body["output"], "trigger": body["trigger"], "automation_id": body["automation_id"]})
+    }
+
+    #[test]
+    fn dashboard_metrics_count_real_work_over_the_week() {
+        let now = chrono::Utc::now();
+        let today = now.to_rfc3339();
+        let long_ago = (now - chrono::Duration::days(40)).to_rfc3339();
+        let runs = vec![
+            metric_run(
+                "completed",
+                today.clone(),
+                json!({"automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7},"output":{"findings":[{"severity":"high"},{"severity":"low"}],"usage":{"input_tokens":120,"output_tokens":30}}}),
+            ),
+            metric_run(
+                "completed",
+                today.clone(),
+                json!({"automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7},"output":{"findings":[],"usage":{"input_tokens":80,"output_tokens":20}}}),
+            ),
+            metric_run(
+                "failed",
+                today.clone(),
+                json!({"automation_id":"a2","trigger":{"kind":"repository"},"output":{"findings":[],"usage":{}}}),
+            ),
+            metric_run(
+                "completed",
+                long_ago,
+                json!({"automation_id":"a3","trigger":{"kind":"issue","repository":"acme/api","number":3},"output":{"findings":[{"severity":"medium"}],"usage":{"input_tokens":5,"output_tokens":5}}}),
+            ),
+        ];
+        let metrics = run_metrics(&runs);
+        assert_eq!(metrics["runs"], 4);
+        assert_eq!(metrics["completed_runs"], 3);
+        assert_eq!(metrics["failed_runs"], 1);
+        assert_eq!(metrics["automations_used"], 3);
+        assert_eq!(metrics["findings"], 3);
+        assert_eq!(
+            metrics["prs_analyzed"], 1,
+            "the same pull request counts once"
+        );
+        assert_eq!(metrics["prs_last_7d"], 1);
+        assert_eq!(metrics["tokens"]["input"], 205);
+        assert_eq!(metrics["tokens"]["output"], 55);
+        assert_eq!(metrics["tokens"]["total"], 260);
+        assert_eq!(metrics["severities"]["high"], 1);
+        assert_eq!(metrics["severities"]["medium"], 1);
+        let weekly = metrics["weekly"].as_array().unwrap();
+        assert_eq!(weekly.len(), 7, "the chart always shows a full week");
+        let today_key = now.date_naive().format("%Y-%m-%d").to_string();
+        let bucket = weekly.iter().find(|d| d["date"] == today_key).unwrap();
+        assert_eq!(bucket["completed"], 2);
+        assert_eq!(bucket["failed"], 1);
+        assert_eq!(bucket["findings"], 2);
+        assert_eq!(
+            bucket["tokens"], 250,
+            "runs outside the week are not counted"
+        );
+        assert_eq!(metrics["weekly_totals"]["tokens"], 250);
+    }
+
+    #[test]
+    fn dashboard_metrics_handle_an_empty_instance() {
+        let metrics = run_metrics(&[]);
+        assert_eq!(metrics["runs"], 0);
+        assert_eq!(metrics["prs_analyzed"], 0);
+        assert_eq!(metrics["tokens"]["total"], 0);
+        assert_eq!(metrics["weekly"].as_array().unwrap().len(), 7);
+        assert!(metrics["weekly"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["completed"] == 0 && d["failed"] == 0));
     }
 }

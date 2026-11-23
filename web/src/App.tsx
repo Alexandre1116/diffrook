@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Plans, { type PlanCatalog } from "./Plans";
 import {
-  Activity,
   ArrowDownRight,
   ArrowRight,
   Bot,
@@ -13,7 +12,6 @@ import {
   CircleHelp,
   Clock3,
   Code2,
-  Command,
   Eye,
   EyeOff,
   ExternalLink,
@@ -204,6 +202,11 @@ const date = (s?: string) =>
     : "—";
 const count = (n?: number) => (n ?? 0).toLocaleString();
 const statusClass = (s = "") => `status status-${s.toLowerCase()}`;
+const updateDismissKey = "diffrook.update-dismissed";
+const compact = (n?: number) =>
+  n && n >= 1000
+    ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
+    : count(n);
 
 function Mark() {
   return (
@@ -246,6 +249,8 @@ function App() {
     [detail, setDetail] = useState<Obj | null>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const [showStarPrompt, setShowStarPrompt] = useState(false);
+  const [updatePrompt, setUpdatePrompt] = useState<Obj | null>(null),
+    [updating, setUpdating] = useState(false);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
@@ -275,6 +280,41 @@ function App() {
     setNotice("Update installed. Reconnecting to Diffrook…");
     window.setTimeout(() => window.location.reload(), 2500);
   };
+  const release = data.updates.latest || null;
+  const applyUpdate = async (tag: string) => {
+    setUpdating(true);
+    try {
+      await settleUpdate(await api("/updates/apply", "POST", { tag }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+  const setUpdatePolicy = async (mode: string) => {
+    try {
+      await settleUpdate(await api("/updates/policy", "POST", { mode }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const setUpdateChannel = async (channel: string) => {
+    try {
+      await settleUpdate(await api("/updates/channel", "POST", { channel }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const dismissUpdate = (tag: string) => {
+    window.localStorage.setItem(`${updateDismissKey}.${tag}`, "1");
+    setUpdatePrompt(null);
+  };
+  // One popup per release: dismissed versions never ask again on this browser.
+  useEffect(() => {
+    if (!release?.supported || typeof window === "undefined") return;
+    if (window.localStorage.getItem(`${updateDismissKey}.${release.tag}`)) return;
+    setUpdatePrompt((current) => (current?.tag === release.tag ? current : release));
+  }, [release]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -513,12 +553,6 @@ function App() {
             <span className="crumb-slash">/</span>
             <strong>{pageTitle}</strong>
           </div>
-          <div className="top-actions">
-            <div className="instance-pill">
-              <span className="live-dot" />
-              API connected
-            </div>
-          </div>
         </header>
         <div className="content">
           {error && (
@@ -544,28 +578,10 @@ function App() {
               openRun={runDetail}
               refresh={reload}
               version={status.version}
-              updates={data.updates}
-              updatePolicy={async (mode) => {
-                try {
-                  await settleUpdate(await api("/updates/policy", "POST", { mode }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-              updateChannel={async (channel) => {
-                try {
-                  await settleUpdate(await api("/updates/channel", "POST", { channel }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-              applyUpdate={async (tag) => {
-                try {
-                  await settleUpdate(await api("/updates/apply", "POST", { tag }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
+              release={release}
+              dismissUpdate={dismissUpdate}
+              applyUpdate={applyUpdate}
+              updating={updating}
             />
           )}
           {page === "automations" && (
@@ -701,7 +717,17 @@ function App() {
             />
           )}
           {page === "settings" && (
-            <SettingsPage data={data} notice={setNotice} reload={reload} />
+            <SettingsPage
+              data={data}
+              notice={setNotice}
+              reload={reload}
+              version={status.version}
+              release={release}
+              updating={updating}
+              updatePolicy={setUpdatePolicy}
+              updateChannel={setUpdateChannel}
+              applyUpdate={applyUpdate}
+            />
           )}
         </div>
       </main>
@@ -816,6 +842,51 @@ function App() {
               <a className="btn primary" href="https://github.com/Alexandre1116/diffrook" target="_blank" rel="noopener noreferrer" onClick={() => setShowStarPrompt(false)}>
                 <Github size={17} /> Star on GitHub <ExternalLink size={15} />
               </a>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {updatePrompt && (
+        <Modal
+          title={`Diffrook ${updatePrompt.version} is available`}
+          close={() => dismissUpdate(updatePrompt.tag)}
+        >
+          <div className="form-stack">
+            <p>
+              This instance runs {status.version}.{" "}
+              {updatePrompt.prerelease
+                ? "This is a pre-release from your beta channel."
+                : "It is the newest stable release on GitHub."}{" "}
+              Install it now, or set an update policy in Settings.
+            </p>
+            <div className="form-actions">
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => dismissUpdate(updatePrompt.tag)}
+              >
+                Not now
+              </button>
+              <a
+                className="btn secondary"
+                href={updatePrompt.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Release notes <ExternalLink size={14} />
+              </a>
+              <button
+                className="btn primary"
+                type="button"
+                disabled={updating}
+                onClick={() => {
+                  setUpdatePrompt(null);
+                  void applyUpdate(updatePrompt.tag);
+                }}
+              >
+                <ArrowDownRight size={15} />
+                {updating ? "Installing…" : "Install update"}
+              </button>
             </div>
           </div>
         </Modal>
@@ -947,10 +1018,10 @@ function Overview({
   openRun,
   refresh,
   version,
-  updates,
-  updatePolicy,
-  updateChannel,
+  release,
+  dismissUpdate,
   applyUpdate,
+  updating,
 }: {
   data: any;
   busy: boolean;
@@ -958,16 +1029,45 @@ function Overview({
   openRun: (r: Obj) => void;
   refresh: () => void;
   version: string;
-  updates: Obj;
-  updatePolicy: (mode: string) => Promise<void>;
-  updateChannel: (channel: string) => Promise<void>;
+  release: Obj | null;
+  dismissUpdate: (tag: string) => void;
   applyUpdate: (tag: string) => Promise<void>;
+  updating: boolean;
 }) {
   const d = data.dashboard;
   const latest = (d.recent_runs || data.runs).slice(0, 5);
-  const [updating, setUpdating] = useState(false);
-  const beta = updates.channel === "beta";
-  const release = (updates.releases || []).find((r: Obj) => r.newer && (beta || !r.prerelease));
+  const weekly: Obj[] = d.weekly || [];
+  const totals = d.weekly_totals || {};
+  const tokens = d.tokens || {};
+  const steps: {
+    ok: boolean;
+    label: string;
+    sub: string;
+    go: Page;
+    icon: any;
+  }[] = [
+    {
+      ok: data.connections.length > 0,
+      label: "Connect a code host",
+      sub: "GitHub, GitLab, Bitbucket, Forgejo or Gitea",
+      go: "connections",
+      icon: GitBranch,
+    },
+    {
+      ok: data.providers.length > 0,
+      label: "Add an AI provider",
+      sub: "OpenAI, Anthropic or Ollama",
+      go: "providers",
+      icon: Sparkles,
+    },
+    {
+      ok: data.automations.length > 0,
+      label: "Create an automation",
+      sub: "Choose repositories and actions",
+      go: "automations",
+      icon: Bot,
+    },
+  ];
   return (
     <>
       <div className="page-head">
@@ -987,74 +1087,116 @@ function Overview({
           </button>
         </div>
       </div>
-      <div className="welcome-banner">
-        <div className="banner-icon">
-          <Mark />
+      {release && (
+        <div className="update-banner" role="status">
+          <ArrowDownRight size={17} />
+          <span className="update-copy">
+            <b>Diffrook {release.version} is available</b>
+            <small>
+              You are running {version}.{" "}
+              {release.supported
+                ? "Installing restarts this instance for a few seconds."
+                : "No update package for this platform yet."}
+            </small>
+          </span>
+          <a
+            className="text-btn"
+            href={release.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Release notes <ExternalLink size={14} />
+          </a>
+          {release.supported && (
+            <button
+              className="btn small primary"
+              disabled={updating}
+              onClick={() => void applyUpdate(release.tag)}
+            >
+              {updating ? "Installing…" : "Install update"}
+            </button>
+          )}
+          <button className="text-btn" onClick={() => dismissUpdate(release.tag)}>
+            Dismiss
+          </button>
         </div>
-        <div>
-          <span className="banner-eyebrow">DIFFROOK IS READY</span>
-          <b>Good code deserves a second set of eyes.</b>
-          <p>
-            Connect a repository and an AI provider to start your first
-            automated review.
-          </p>
+      )}
+      {!data.connections.length && (
+        <div className="welcome-banner">
+          <div className="banner-icon">
+            <Mark />
+          </div>
+          <div>
+            <span className="banner-eyebrow">DIFFROOK IS READY</span>
+            <b>Good code deserves a second set of eyes.</b>
+            <p>
+              Connect a repository and an AI provider to start your first
+              automated review.
+            </p>
+          </div>
+          <button className="banner-link" onClick={() => go("connections")}>
+            Set up connections <ArrowRight size={16} />
+          </button>
+          <span className="banner-line" />
         </div>
-        <button className="banner-link" onClick={() => go("connections")}>
-          Set up connections <ArrowRight size={16} />
-        </button>
-        <span className="banner-line" />
-      </div>
+      )}
       <div className="stat-grid">
         <Stat
           label="Automations"
           value={d.automations}
-          hint={`${d.active_automations ?? 0} active`}
+          hint={`${d.active_automations ?? 0} active · ${d.automations_used ?? 0} used`}
           icon={Bot}
         />
-        <Stat label="Runs" value={d.runs} hint="All time" icon={Activity} />
+        <Stat
+          label="Pull requests"
+          value={d.prs_analyzed}
+          hint={`${d.prs_last_7d ?? 0} reviewed in the last 7 days`}
+          icon={GitPullRequest}
+        />
         <Stat
           label="Findings"
           value={d.findings}
-          hint="Across all runs"
+          hint={`From ${d.completed_runs ?? 0} completed runs`}
           icon={TriangleAlert}
         />
-        <div className="stat-card uptime">
-          <div className="stat-top">
-            <span>INSTANCE STATUS</span>
-            <ShieldCheck size={17} />
-          </div>
-          <strong>
-            <i className="live-dot" />
-            API reachable
-          </strong>
-          <small>Version {version}</small>
-        </div>
+        <Stat
+          label="Model tokens"
+          value={tokens.total}
+          hint={`${compact(tokens.input)} in · ${compact(tokens.output)} out`}
+          icon={Sparkles}
+        />
       </div>
-      <section className="panel-card release-panel">
-        <div className="release-copy">
-          <div className="eyebrow">DIFFROOK RELEASES</div>
-          <h2>{release ? `Version ${release.version} is available` : "Version updates"}</h2>
-          <p>{release ? `${release.prerelease ? "Pre-release" : "Release"} published ${date(release.published_at)}. ${release.supported ? "A compatible Linux package is ready." : "No update package for this platform yet."}` : `You are running the latest version, ${version}.`}</p>
-          <div className="release-list">
-            {(updates.releases || []).slice(0, 4).map((item: Obj) => <a key={item.tag} href={item.url} target="_blank" rel="noreferrer">{item.version}{item.prerelease && <span>Pre-release</span>}</a>)}
-            {!(updates.releases || []).length && <small>{updates.error || "Checking GitHub for published releases…"}</small>}
+      <section className="panel-card chart-panel">
+        <div className="panel-title">
+          <div>
+            <h3>Automation activity</h3>
+            <p>Runs completed and failed over the last 7 days</p>
+          </div>
+          <div className="chart-legend">
+            <span>
+              <i className="swatch completed" />
+              {count(totals.completed)} completed
+            </span>
+            <span>
+              <i className="swatch failed" />
+              {count(totals.failed)} failed
+            </span>
           </div>
         </div>
-        <div className="release-controls">
-          <label>Update policy
-            <select value={updates.policy || "manual"} onChange={(e) => void updatePolicy(e.target.value)}>
-              <option value="manual">Manual updates</option>
-              <option value="automatic">Automatic updates</option>
-            </select>
-          </label>
-          <label>Release channel
-            <select value={beta ? "beta" : "stable"} onChange={(e) => void updateChannel(e.target.value)}>
-              <option value="stable">Stable releases</option>
-              <option value="beta">Beta releases</option>
-            </select>
-          </label>
-          {release && <button className="btn primary" disabled={updating || !release.supported} onClick={async () => { setUpdating(true); try { await applyUpdate(release.tag); } finally { setUpdating(false); } }}><ArrowDownRight size={15} />{updating ? "Updating…" : "Install update"}</button>}
-          <small>Automatic updates download and restart this Linux container. Back up /data first.</small>
+        <ActivityChart weekly={weekly} />
+        <div className="chart-foot">
+          <span>
+            <b>{count((totals.completed || 0) + (totals.failed || 0))}</b> runs
+          </span>
+          <span>
+            <b>{count(totals.findings)}</b> findings
+          </span>
+          <span>
+            <b>{compact(totals.tokens)}</b> tokens
+          </span>
+          <span>
+            <b>{count(d.prs_last_7d)}</b> pull requests
+          </span>
         </div>
       </section>
       <div className="section-heading">
@@ -1078,7 +1220,7 @@ function Overview({
           />
         )}
       </div>
-      <div className="bottom-grid">
+      {!steps.every((s) => s.ok) && (
         <div className="panel-card setup-card">
           <div className="panel-title">
             <div>
@@ -1086,40 +1228,11 @@ function Overview({
               <p>Three steps to your first review</p>
             </div>
             <span className="progress-chip">
-              {
-                [
-                  data.connections.length > 0,
-                  data.providers.length > 0,
-                  data.automations.length > 0,
-                ].filter(Boolean).length
-              }{" "}
-              / 3
+              {steps.filter((s) => s.ok).length} / {steps.length}
             </span>
           </div>
           <div className="steps">
-            {[
-              {
-                ok: data.connections.length > 0,
-                label: "Connect a code host",
-                sub: "GitHub, GitLab, Bitbucket, Forgejo or Gitea",
-                go: "connections" as Page,
-                icon: GitBranch,
-              },
-              {
-                ok: data.providers.length > 0,
-                label: "Add an AI provider",
-                sub: "OpenAI, Anthropic or Ollama",
-                go: "providers" as Page,
-                icon: Sparkles,
-              },
-              {
-                ok: data.automations.length > 0,
-                label: "Create an automation",
-                sub: "Choose repositories and actions",
-                go: "automations" as Page,
-                icon: Bot,
-              },
-            ].map((s, i) => (
+            {steps.map((s, i) => (
               <button
                 className={`step ${s.ok ? "done" : ""}`}
                 key={s.label}
@@ -1144,43 +1257,65 @@ function Overview({
             ))}
           </div>
         </div>
-        <div className="panel-card quick-card">
-          <div className="panel-title">
-            <div>
-              <h3>Quick links</h3>
-              <p>Manage your setup</p>
-            </div>
-            <div className="quick-spark">
-              <Command size={16} />
-            </div>
-          </div>
-          <button onClick={() => go("automations")}>
-            <Bot size={17} />
-            <span>
-              <b>Automations</b>
-              <small>Configure your workflows</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-          <button onClick={() => go("connections")}>
-            <Github size={17} />
-            <span>
-              <b>Connections</b>
-              <small>Manage code host access</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-          <button onClick={() => go("settings")}>
-            <SlidersHorizontal size={17} />
-            <span>
-              <b>Settings</b>
-              <small>Export configuration</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-        </div>
-      </div>
+      )}
     </>
+  );
+}
+const dayLabel = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+function ActivityChart({ weekly }: { weekly: Obj[] }) {
+  const peak = Math.max(
+    1,
+    ...weekly.map((day) => (day.completed || 0) + (day.failed || 0)),
+  );
+  const idle = weekly.every(
+    (day) => !(day.completed || 0) && !(day.failed || 0),
+  );
+  return (
+    <div
+      className="chart"
+      role="img"
+      aria-label={weekly
+        .map(
+          (day) =>
+            `${day.date}: ${day.completed || 0} completed, ${day.failed || 0} failed`,
+        )
+        .join("; ")}
+    >
+      {weekly.map((day) => {
+        const completed = day.completed || 0;
+        const failed = day.failed || 0;
+        const total = completed + failed;
+        return (
+          <div className="chart-col" key={day.date}>
+            <div className="chart-track">
+              <div
+                className={`chart-bar ${total ? "" : "quiet"}`}
+                style={{
+                  height: total ? `${Math.max(8, (total / peak) * 100)}%` : "3px",
+                }}
+                title={`${day.date}: ${completed} completed, ${failed} failed, ${day.findings || 0} findings`}
+              >
+                {failed > 0 && (
+                  <span className="bar-seg failed" style={{ flexGrow: failed }} />
+                )}
+                {completed > 0 && (
+                  <span
+                    className="bar-seg completed"
+                    style={{ flexGrow: completed }}
+                  />
+                )}
+              </div>
+            </div>
+            <small>{dayLabel(day.date)}</small>
+          </div>
+        );
+      })}
+      {idle && <p className="chart-empty">No runs in the last 7 days</p>}
+    </div>
   );
 }
 function Stat({
@@ -1764,11 +1899,43 @@ function SettingsPage({
   data,
   notice,
   reload,
+  version,
+  release,
+  updating,
+  updatePolicy,
+  updateChannel,
+  applyUpdate,
 }: {
   data: any;
   notice: (s: string) => void;
   reload: () => Promise<void>;
+  version: string;
+  release: Obj | null;
+  updating: boolean;
+  updatePolicy: (mode: string) => Promise<void>;
+  updateChannel: (channel: string) => Promise<void>;
+  applyUpdate: (tag: string) => Promise<void>;
 }) {
+  const beta = data.updates.channel === "beta";
+  const [checking, setChecking] = useState(false),
+    [checkError, setCheckError] = useState("");
+  const checkNow = async () => {
+    setChecking(true);
+    setCheckError("");
+    try {
+      const result = await api<Obj>("/updates/check", "POST", {});
+      notice(
+        result?.latest
+          ? `GitHub offers v${result.latest.version}; this instance runs v${result.current_version}`
+          : `v${result?.current_version} is the newest release on GitHub`,
+      );
+      await reload();
+    } catch (e) {
+      setCheckError((e as Error).message);
+    } finally {
+      setChecking(false);
+    }
+  };
   const exportConfig = () => {
     const sanitized = {
       automations: data.automations,
@@ -1827,7 +1994,7 @@ function SettingsPage({
             </p>
             <div className="settings-line">
               <span>Version</span>
-              <b>Self-hosted</b>
+              <b>v{version}</b>
             </div>
             <div className="settings-line">
               <span>Automations</span>
@@ -1841,6 +2008,112 @@ function SettingsPage({
               <span>AI providers</span>
               <b>{data.providers.length}</b>
             </div>
+          </div>
+        </section>
+        <section className="panel-card setting-panel">
+          <div className="setting-icon">
+            <RefreshCw size={19} />
+          </div>
+          <div>
+            <h3>Updates</h3>
+            <p>
+              Diffrook checks GitHub releases every 15 minutes and offers the
+              newest one on your release channel.
+            </p>
+            <div className="settings-line">
+              <span>Current version</span>
+              <b>v{version}</b>
+            </div>
+            <div className="settings-line">
+              <span>Latest {beta ? "beta" : "stable"} release</span>
+              <b>{release ? `v${release.version}` : "Up to date"}</b>
+            </div>
+            <div className="settings-line">
+              <span>Last release check</span>
+              <b>{date(data.updates.checked_at)}</b>
+            </div>
+            {data.updates.error && (
+              <div className="settings-line" role="alert">
+                <span>Last check failed</span>
+                <b>{data.updates.error}</b>
+              </div>
+            )}
+            {checkError && (
+              <div className="settings-line" role="alert">
+                <span>Check now failed</span>
+                <b>{checkError}</b>
+              </div>
+            )}
+            <button
+              className="btn secondary small"
+              onClick={() => void checkNow()}
+              disabled={checking}
+            >
+              {checking ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}{" "}
+              Check GitHub now
+            </button>
+            <div className="update-controls">
+              <label>
+                Update policy
+                <select
+                  value={data.updates.policy || "manual"}
+                  onChange={(e) => void updatePolicy(e.target.value)}
+                >
+                  <option value="manual">Manual: I approve each install</option>
+                  <option value="automatic">
+                    Automatic: install new releases by themselves
+                  </option>
+                </select>
+                <small>
+                  Automatic updates need a Linux container and run only when no
+                  automation is in progress.
+                </small>
+              </label>
+              <label>
+                Release channel
+                <select
+                  value={beta ? "beta" : "stable"}
+                  onChange={(e) => void updateChannel(e.target.value)}
+                >
+                  <option value="stable">Stable releases</option>
+                  <option value="beta">Beta releases</option>
+                </select>
+                <small>
+                  Beta follows pre-releases, so you test changes earlier.
+                </small>
+              </label>
+            </div>
+            {release && (
+              <button
+                className="btn primary"
+                disabled={updating || !release.supported}
+                onClick={() => void applyUpdate(release.tag)}
+              >
+                <ArrowDownRight size={15} />
+                {updating
+                  ? "Installing…"
+                  : release.supported
+                    ? `Install v${release.version}`
+                    : "No package for this platform"}
+              </button>
+            )}
+            <p>
+              {data.updates.policy === "automatic"
+                ? "New releases download from GitHub, restart this container, and roll back if the new version fails to start. Back up your data volume first."
+                : "Installing an update restarts this container for a few seconds."}
+            </p>
+            <a
+              className="text-btn"
+              href="https://github.com/Alexandre1116/diffrook/releases"
+              target="_blank"
+              rel="noreferrer"
+            >
+              All releases <ExternalLink size={14} />
+            </a>
           </div>
         </section>
         <section className="panel-card setting-panel">
@@ -2622,11 +2895,12 @@ function AutomationForm({
               rows={5}
               value={v.instructions}
               onChange={(e) => upd("instructions", e.target.value)}
-              placeholder="Focus on correctness, security, and user-visible regressions. Explain each finding with a file and line reference."
+              placeholder="Focus on correctness, security, and user-visible regressions. Cite the file and line for each finding. Skip style opinions and anything the diff cannot support."
             />
             <small>
-              Repository content is treated as untrusted input and cannot change
-              these instructions.
+              Short and specific works best: the model already reports only what
+              it can verify. Repository content stays untrusted input and cannot
+              change these instructions.
             </small>
           </label>
           <div className="number-grid">
