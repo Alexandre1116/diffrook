@@ -817,9 +817,9 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
     let intent = Intent::Automatic;
     if let Err(e) = stage_release(state, &release, &intent).await {
         if withdrawn(&e) {
-            // The administrator asked for another release while this one was
-            // being prepared; their request is the one to carry out next.
-            tracing::info!("the automatic update gives way to a request made by hand: {e:#}");
+            // The administrator asked for another release, or switched to
+            // manual updates, while this one was being prepared.
+            tracing::info!("the automatic update stepped back: {e:#}");
             return Ok(AutomaticOutcome::Idle);
         }
         if stale(&e) {
@@ -906,6 +906,11 @@ async fn still_wanted(state: &AppState, intent: &Intent<'_>, release: &Value) ->
             }
         }
         Intent::Automatic => {
+            // Only the automatic policy authorizes this install; switching to
+            // manual during the download takes that authority back.
+            if policy(state).await.as_deref() != Some("automatic") {
+                return Err(withdrawal("updates were switched to manual"));
+            }
             if let Some((_, pending)) = &queued {
                 return Err(withdrawal(&format!(
                     "{} was asked for by hand",
@@ -2047,8 +2052,8 @@ mod tests {
             .unwrap_err();
         assert!(stale(&error), "an off-channel release is refused here too");
 
-        // On the beta channel the same release is fine.
-        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel','beta') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        // On the beta channel, with the automatic policy, the same release is fine.
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel','beta'),('updates.policy','automatic') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
             .execute(&state.db)
             .await
             .unwrap();
@@ -2083,10 +2088,28 @@ mod tests {
             "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
             "asset_size": 1234,
         });
+        let set_policy = |mode: &'static str| {
+            sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+                .bind(mode)
+                .execute(&state.db)
+        };
+        set_policy("automatic").await.unwrap();
         let _gate = state.update_lock.lock().await;
         still_wanted(&state, &Intent::Automatic, &release)
             .await
             .expect("with nothing queued, the policy may act");
+
+        // Switching to manual while the package downloads withdraws the
+        // automatic install, but a button pressed by hand still works.
+        set_policy("manual").await.unwrap();
+        let error = still_wanted(&state, &Intent::Automatic, &release)
+            .await
+            .unwrap_err();
+        assert!(withdrawn(&error), "{error:#}");
+        still_wanted(&state, &Intent::Direct { tag: "v9.9.9" }, &release)
+            .await
+            .expect("a direct request does not depend on the policy");
+        set_policy("automatic").await.unwrap();
 
         save_pending(
             &state,
