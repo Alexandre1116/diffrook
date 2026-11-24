@@ -447,6 +447,9 @@ async fn record_install_failure(state: &AppState, tag: &str, message: &str, coun
     }
     let error = json!({
         "tag": tag,
+        // The page prints versions with its own "v"; handing it the bare version
+        // is what keeps "vv1.5.0" from ever appearing.
+        "version": tag.trim_start_matches('v'),
         "message": message,
         "attempts": attempts,
         "counted": counted,
@@ -583,14 +586,21 @@ struct Pending {
 }
 
 async fn pending_install(state: &AppState) -> Option<Pending> {
-    sqlx::query_scalar::<_, String>(
+    queued_install(state).await.map(|(_, pending)| pending)
+}
+
+/// The queued install together with the exact text stored for it. The text is
+/// the queue's identity: writing back only succeeds while nothing else has
+/// cancelled or replaced the request in the meantime.
+async fn queued_install(state: &AppState) -> Option<(String, Pending)> {
+    let stored = sqlx::query_scalar::<_, String>(
         "SELECT value FROM app_settings WHERE key='updates.pending_install'",
     )
     .fetch_optional(&state.db)
     .await
     .ok()
-    .flatten()
-    .and_then(|stored| serde_json::from_str(&stored).ok())
+    .flatten()?;
+    Some(stored.clone()).zip(serde_json::from_str(&stored).ok())
 }
 
 async fn save_pending(state: &AppState, pending: &Pending) -> anyhow::Result<()> {
@@ -599,6 +609,35 @@ async fn save_pending(state: &AppState, pending: &Pending) -> anyhow::Result<()>
         .execute(&state.db)
         .await?;
     Ok(())
+}
+
+/// Keeps a queued install for another attempt, but only if it is still the
+/// request this worker read. An administrator who cancelled it, or queued a
+/// different release, wins over a retry that was already in flight.
+async fn resave_pending(state: &AppState, stored: &str, pending: &Pending) -> anyhow::Result<bool> {
+    let result = sqlx::query(
+        "UPDATE app_settings SET value=? WHERE key='updates.pending_install' AND value=?",
+    )
+    .bind(serde_json::to_string(pending)?)
+    .bind(stored)
+    .execute(&state.db)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+/// Drops the queued install this worker read, and only that one.
+async fn clear_queued(state: &AppState, stored: &str) -> bool {
+    match sqlx::query("DELETE FROM app_settings WHERE key='updates.pending_install' AND value=?")
+        .bind(stored)
+        .execute(&state.db)
+        .await
+    {
+        Ok(result) => result.rows_affected() == 1,
+        Err(e) => {
+            tracing::warn!("could not clear the queued update: {e:#}");
+            false
+        }
+    }
 }
 
 async fn clear_pending_install(state: &AppState) {
@@ -610,13 +649,46 @@ async fn clear_pending_install(state: &AppState) {
     }
 }
 
+/// Why a queued install should no longer happen, or `None` to go ahead with it.
+/// A queued request was accepted against the releases and the channel of the
+/// moment it was pressed; if the image was upgraded underneath it, or the channel
+/// changed while automations finished, installing it anyway would be a decision
+/// nobody made.
+fn queued_release_stale(release: &Value, beta: bool) -> Option<&'static str> {
+    let running = semver::Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
+    let wanted = release["version"]
+        .as_str()
+        .and_then(|version| semver::Version::parse(version).ok())
+        .or_else(|| {
+            release["tag"]
+                .as_str()
+                .and_then(|tag| semver::Version::parse(tag.trim_start_matches('v')).ok())
+        })?;
+    if wanted <= running {
+        return Some("this instance already runs that release or a newer one");
+    }
+    if !(beta || is_stable(release)) {
+        return Some("the release is no longer on this channel");
+    }
+    if release["supported"] != true {
+        return Some("the release package is not installable here");
+    }
+    None
+}
+
 /// Installs whatever update is due: first one the administrator queued by hand,
 /// then the newest release when the automatic policy asks for it.
 async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
     let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
         .fetch_one(&state.db)
         .await?;
-    if let Some(pending) = pending_install(state).await {
+    if let Some((stored, pending)) = queued_install(state).await {
+        let beta = channel(state).await == "beta";
+        if let Some(reason) = queued_release_stale(&pending.release, beta) {
+            tracing::warn!("dropping the queued update to {}: {reason}", pending.tag);
+            clear_queued(state, &stored).await;
+            return Ok(AutomaticOutcome::Idle);
+        }
         let due = chrono::DateTime::parse_from_rfc3339(&pending.next_try)
             .map(|when| chrono::Utc::now() >= when.with_timezone(&chrono::Utc))
             .unwrap_or(true);
@@ -632,7 +704,7 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
             Ok(()) => {
                 // Only cleared once the package is staged: losing the request
                 // before that would break the promise the button made.
-                clear_pending_install(state).await;
+                clear_queued(state, &stored).await;
                 return Ok(AutomaticOutcome::Restarting);
             }
             Err(e) => {
@@ -641,15 +713,20 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
                 if counted {
                     // A package that cannot install here will not improve by
                     // asking again; the administrator sees why in Settings.
-                    clear_pending_install(state).await;
+                    clear_queued(state, &stored).await;
                 } else {
                     let mut retry = pending.clone();
                     retry.attempts = retry.attempts.saturating_add(1);
                     retry.next_try = (chrono::Utc::now()
                         + chrono::Duration::seconds(60 * i64::from(retry.attempts.max(1))))
                     .to_rfc3339();
-                    if let Err(e) = save_pending(state, &retry).await {
-                        tracing::warn!("could not keep the queued update: {e:#}");
+                    match resave_pending(state, &stored, &retry).await {
+                        Ok(true) => {}
+                        Ok(false) => tracing::info!(
+                            "the queued update to {} was cancelled or replaced while it ran; not restoring it",
+                            pending.tag
+                        ),
+                        Err(e) => tracing::warn!("could not keep the queued update: {e:#}"),
                     }
                 }
                 return Err(e);
@@ -774,10 +851,12 @@ async fn stage_release(state: &AppState, release: &Value) -> Result<()> {
         );
     }
     let data_dir = state.data_dir.clone();
+    // extract_release marks what the package got wrong; a job that never
+    // reports back is this process's problem, not the release's, so it is not
+    // counted against the release.
     let dir = tokio::task::spawn_blocking(move || extract_release(&data_dir, &tag_safe, &archive))
         .await
-        .context("the release package could not be unpacked")
-        .context(Fatal)??;
+        .map_err(|e| anyhow::anyhow!("unpacking the release package was interrupted: {e}"))??;
     let _ = tokio::fs::remove_file(state.data_dir.join("failed-update.txt")).await;
     let descriptor = json!({"version":release["version"],"tag":tag,"path":dir.to_string_lossy(),"attempts":0,"confirmed":false});
     let tmp = state.data_dir.join("active-update.json.tmp");
@@ -806,6 +885,16 @@ fn can_stage_update(data_dir: &Path) -> Result<bool> {
 }
 
 fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> {
+    // Two kinds of failure meet here. Something wrong with the package itself
+    // will be wrong on every attempt, so it is marked fatal and the updater
+    // stops chasing it. A failed write is the disk's fault, and stays retryable.
+    macro_rules! package_ensure {
+        ($cond:expr, $($arg:tt)+) => {
+            if !$cond {
+                return Err(anyhow::anyhow!($($arg)+).context(Fatal));
+            }
+        };
+    }
     let parent = data_dir.join("updates");
     std::fs::create_dir_all(&parent)?;
     let stage = parent.join(format!("{tag}.tmp"));
@@ -818,18 +907,24 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
     let mut total = 0u64;
     let mut binary = false;
     let mut web_index = false;
-    for (total_entries, entry) in archive.entries()?.enumerate() {
-        let mut entry = entry?;
-        anyhow::ensure!(
+    let entries = archive
+        .entries()
+        .map_err(|e| anyhow::Error::from(e).context(Fatal))?;
+    for (total_entries, entry) in entries.enumerate() {
+        let mut entry = entry.map_err(|e| anyhow::Error::from(e).context(Fatal))?;
+        package_ensure!(
             total_entries < 20_000,
             "release package contains too many files"
         );
-        let path = entry.path()?.into_owned();
-        anyhow::ensure!(
+        let path = entry
+            .path()
+            .map_err(|e| anyhow::Error::from(e).context(Fatal))?
+            .into_owned();
+        package_ensure!(
             path.components().all(|c| matches!(c, Component::Normal(_))),
             "release archive has an unsafe path"
         );
-        anyhow::ensure!(
+        package_ensure!(
             entry.header().entry_type().is_file() || entry.header().entry_type().is_dir(),
             "release archive may contain regular files and directories only"
         );
@@ -843,15 +938,15 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
                 }
             })
             .collect();
-        anyhow::ensure!(
+        package_ensure!(
             parts
                 .first()
                 .is_some_and(|p| matches!(p.as_ref(), "diffrook" | "web" | "LICENSE" | "licenses")),
             "unexpected file in release archive"
         );
         if parts[0] == "diffrook" || parts[0] == "LICENSE" {
-            anyhow::ensure!(parts.len() == 1, "unexpected root archive path");
-            anyhow::ensure!(
+            package_ensure!(parts.len() == 1, "unexpected root archive path");
+            package_ensure!(
                 entry.header().entry_type().is_file(),
                 "root archive entry must be a regular file"
             );
@@ -871,7 +966,7 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
             continue;
         }
         total = total.saturating_add(entry.size());
-        anyhow::ensure!(
+        package_ensure!(
             total <= MAX_EXTRACTED,
             "release expands beyond the size limit"
         );
@@ -879,10 +974,14 @@ fn extract_release(data_dir: &Path, tag: &str, bytes: &[u8]) -> Result<PathBuf> 
         if let Some(parent) = out.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let mut file = std::fs::File::create(out)?;
-        std::io::copy(&mut entry, &mut file)?;
+        // Reading and writing are kept apart so a corrupt stream - the package's
+        // fault, and fatal - is not confused with a failing disk, which is not.
+        let mut body = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut body)
+            .map_err(|e| anyhow::Error::from(e).context(Fatal))?;
+        std::fs::write(out, &body)?;
     }
-    anyhow::ensure!(
+    package_ensure!(
         binary && web_index,
         "release package is missing the application or web interface"
     );
@@ -953,6 +1052,12 @@ pub async fn api(State(state): State<AppState>, headers: HeaderMap) -> Response 
     value["channel"] = json!(channel(&state).await);
     value["latest"] = offer_in(&value, beta);
     value["pending_install"] = json!(pending_install(&state).await.map(|pending| pending.tag));
+    value["pending_version"] = json!(pending_install(&state).await.map(|pending| {
+        pending.release["version"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| pending.tag.trim_start_matches('v').to_owned())
+    }));
     Json(value).into_response()
 }
 
@@ -983,7 +1088,22 @@ pub async fn set_policy(
         );
     }
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    automatic_response(&state, install_due_update(&state).await, "mode", mode).await
+    automatic_response(&state, install_due_update(&state).await, "mode", mode, None).await
+}
+
+/// Drops a queued install the chosen channel no longer offers, so switching from
+/// beta back to stable cannot leave a pre-release waiting to be installed.
+async fn drop_stale_queue(state: &AppState, beta: bool) -> Option<String> {
+    let (stored, pending) = queued_install(state).await?;
+    queued_release_stale(&pending.release, beta)?;
+    if clear_queued(state, &stored).await {
+        tracing::info!(
+            "the queued update to {} was dropped: it is not on the chosen channel",
+            pending.tag
+        );
+        return Some(pending.tag);
+    }
+    None
 }
 
 /// Turns an automatic-update attempt into the JSON both settings endpoints
@@ -993,6 +1113,7 @@ async fn automatic_response(
     result: Result<AutomaticOutcome>,
     field: &str,
     value: &str,
+    dropped: Option<&str>,
 ) -> Response {
     // The setting itself was already saved, so a failed immediate install is
     // reported as part of a successful change rather than a rejected request.
@@ -1008,6 +1129,7 @@ async fn automatic_response(
         "restarting": matches!(outcome, Some(AutomaticOutcome::Restarting)),
         "deferred": matches!(outcome, Some(AutomaticOutcome::Deferred)),
         "install_error": state.updates.read().await["install_error"],
+        "dropped_pending": dropped,
     }))
     .into_response()
 }
@@ -1024,7 +1146,17 @@ pub async fn set_channel(
         return error(StatusCode::BAD_REQUEST, "Choose stable or beta releases");
     };
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    automatic_response(&state, install_due_update(&state).await, "channel", channel).await
+    // A queued install was accepted against the old channel. If the new one does
+    // not offer that release, saying so now is better than letting it arrive later.
+    let dropped = drop_stale_queue(&state, channel == "beta").await;
+    automatic_response(
+        &state,
+        install_due_update(&state).await,
+        "channel",
+        channel,
+        dropped.as_deref(),
+    )
+    .await
 }
 
 /// Runs a release check on demand so an administrator can confirm the GitHub
@@ -1182,11 +1314,19 @@ pub async fn apply(
         return Json(json!({"ok":true,"queued":true,"restarting":false})).into_response();
     }
     match install(&state, tag).await {
-        Ok(()) => Json(json!({"ok":true,"restarting":true})).into_response(),
-        Err(e) => {
-            clear_pending_install(&state).await;
-            error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}"))
+        Ok(()) => {
+            // The request for this release has now been carried out; anything
+            // queued for a different release stays exactly as it was.
+            if let Some((stored, pending)) = queued_install(&state).await {
+                if pending.tag == tag {
+                    clear_queued(&state, &stored).await;
+                }
+            }
+            Json(json!({"ok":true,"restarting":true})).into_response()
         }
+        // A failed attempt leaves the queue alone. Dropping a request that
+        // belongs to another release would lose an instruction nobody withdrew.
+        Err(e) => error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}")),
     }
 }
 
@@ -1526,6 +1666,103 @@ mod tests {
         );
         clear_pending_install(&state).await;
         assert!(pending_install(&state).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_or_replaced_queue_is_never_restored_by_a_retry() {
+        // The worker that lost the race must not put back a request nobody wants.
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let release = json!({
+            "tag": "v9.9.9", "version": "9.9.9", "prerelease": false, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        let pending = Pending {
+            tag: "v9.9.9".into(),
+            release: release.clone(),
+            attempts: 0,
+            next_try: chrono::Utc::now().to_rfc3339(),
+        };
+        save_pending(&state, &pending).await.unwrap();
+        let (read, _) = queued_install(&state).await.unwrap();
+
+        clear_pending_install(&state).await;
+        assert!(
+            !resave_pending(&state, &read, &pending).await.unwrap(),
+            "a retry must not resurrect a cancelled request"
+        );
+        assert!(pending_install(&state).await.is_none());
+
+        let other = Pending {
+            tag: "v8.8.8".into(),
+            release,
+            attempts: 0,
+            next_try: chrono::Utc::now().to_rfc3339(),
+        };
+        save_pending(&state, &other).await.unwrap();
+        assert!(
+            !clear_queued(&state, &read).await,
+            "an out-of-date request deletes nothing that came after it"
+        );
+        assert_eq!(pending_install(&state).await.unwrap().tag, "v8.8.8");
+        let (current, _) = queued_install(&state).await.unwrap();
+        assert!(clear_queued(&state, &current).await);
+        assert!(pending_install(&state).await.is_none());
+    }
+
+    #[test]
+    fn a_queued_install_is_dropped_when_it_stops_being_an_offered_release() {
+        let beta =
+            json!({"tag":"v9.9.9-rc.1","version":"9.9.9-rc.1","prerelease":true,"supported":true});
+        assert!(
+            queued_release_stale(&beta, true).is_none(),
+            "a pre-release queued on the beta channel stays queued"
+        );
+        assert_eq!(
+            queued_release_stale(&beta, false),
+            Some("the release is no longer on this channel"),
+            "switching back to stable must not leave a pre-release queued"
+        );
+        let old = json!({"tag":"v0.2.0","version":"0.2.0","prerelease":false,"supported":true});
+        assert_eq!(
+            queued_release_stale(&old, false),
+            Some("this instance already runs that release or a newer one"),
+            "an image upgrade overtakes the queue"
+        );
+        let unusable =
+            json!({"tag":"v99.0.0","version":"99.0.0","prerelease":false,"supported":false});
+        assert_eq!(
+            queued_release_stale(&unusable, false),
+            Some("the release package is not installable here")
+        );
+    }
+
+    #[test]
+    fn a_package_that_cannot_be_unpacked_is_not_chased_forever() {
+        let dir = tempfile::tempdir().unwrap();
+        let error =
+            extract_release(dir.path(), "v9.9.9", b"not a gzip archive at all").unwrap_err();
+        assert!(
+            fatal(&error),
+            "a broken package is the package's fault: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_install_tells_the_page_which_version_failed() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        record_install_failure(&state, "v9.9.9", "the package is unusable", true).await;
+        let error = install_error(&state).await;
+        assert_eq!(error["tag"], "v9.9.9");
+        assert_eq!(
+            error["version"], "9.9.9",
+            "the page adds its own v, so the tag must not be echoed as a version"
+        );
+        clear_install_failure(&state, "v9.9.9").await;
+        assert!(install_error(&state).await.is_null());
     }
 
     #[test]

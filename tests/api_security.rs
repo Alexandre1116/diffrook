@@ -371,6 +371,78 @@ async fn a_queued_update_survives_and_can_be_cancelled() {
 }
 
 #[tokio::test]
+async fn switching_channel_back_to_stable_drops_a_queued_pre_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    let cookie = admin(&app, &state).await;
+    *state.updates.write().await = json!({
+        "current_version": env!("CARGO_PKG_VERSION"),
+        "releases": [{
+            "tag": "v99.0.0-rc.1", "version": "99.0.0-rc.1", "newer": true, "prerelease": true,
+            "supported": true, "url": "https://github.com/Alexandre1116/diffrook/releases/tag/v99.0.0-rc.1",
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v99.0.0-rc.1/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1024
+        }],
+        "checked_at": chrono::Utc::now().to_rfc3339(),
+        "error": null
+    });
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/channel",
+        Some(json!({"channel": "beta"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO runs(id,automation_id,body,created_at,status) VALUES('busy','a1',?,?,'running')")
+        .bind(json!({"automation_id": "a1"}).to_string())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v99.0.0-rc.1"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], true);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(updates["pending_install"], "v99.0.0-rc.1");
+    assert_eq!(
+        updates["pending_version"], "99.0.0-rc.1",
+        "the page prefixes its own v, so it needs the bare version"
+    );
+
+    // Going back to stable must take the queued pre-release with it.
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/channel",
+        Some(json!({"channel": "stable"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["dropped_pending"], "v99.0.0-rc.1",
+        "the change says what it gave up"
+    );
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["pending_install"].is_null() && updates["pending_version"].is_null(),
+        "a release the channel no longer offers is not left queued: {updates}"
+    );
+}
+
+#[tokio::test]
 async fn strict_inputs_reject_shadow_fields_and_internal_urls_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let state = diffrook::core::AppState::new(dir.path()).await.unwrap();

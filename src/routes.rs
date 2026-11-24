@@ -1278,6 +1278,10 @@ struct DayMetrics {
     failed: i64,
     findings: i64,
     tokens: u64,
+    /// Runs in that day whose provider actually reported a token count. Without
+    /// it, a week of zero measured spend is indistinguishable from a week where
+    /// nothing was spent.
+    measured: i64,
 }
 
 /// When a run's work belongs on the timeline: the moment it ended, falling back
@@ -1409,6 +1413,7 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
             bucket.findings += found as i64;
             if let Some((input, output)) = run_tokens(run) {
                 bucket.tokens = bucket.tokens.saturating_add(input + output);
+                bucket.measured += 1;
             }
         }
         if let Some((input, output)) = run_tokens(run) {
@@ -1426,15 +1431,20 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
                 "failed": metrics.failed,
                 "findings": metrics.findings,
                 "tokens": metrics.tokens,
+                "measured": metrics.measured,
             })
         })
         .collect();
     let weekly_totals = weekly.iter().fold(
-        json!({"completed": 0, "failed": 0, "findings": 0, "tokens": 0}),
+        json!({"completed": 0, "failed": 0, "findings": 0, "tokens": 0, "runs_with_usage": 0}),
         |mut acc, day| {
             for key in ["completed", "failed", "findings", "tokens"] {
                 acc[key] = json!(acc[key].as_i64().unwrap_or(0) + day[key].as_i64().unwrap_or(0));
             }
+            acc["runs_with_usage"] = json!(
+                acc["runs_with_usage"].as_i64().unwrap_or(0)
+                    + day["measured"].as_i64().unwrap_or(0)
+            );
             acc
         },
     );
@@ -1950,6 +1960,35 @@ mod tests {
         );
         assert_eq!(metrics["weekly_totals"]["tokens"], 841);
         assert_eq!(metrics["weekly_totals"]["completed"], 5);
+        assert_eq!(
+            metrics["weekly_totals"]["runs_with_usage"], 6,
+            "the week's token figure stands on the runs that reported usage"
+        );
+    }
+
+    #[test]
+    fn a_week_that_measured_no_usage_cannot_be_read_as_spending_nothing() {
+        let today = chrono::Utc::now().to_rfc3339();
+        let runs = vec![
+            metric_run(
+                RUN_SUCCEEDED,
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{"findings":[{"severity":"high"}]}}),
+            ),
+            metric_run(
+                "failed",
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{}}),
+            ),
+        ];
+        let metrics = run_metrics(&runs, &[json!({"id":"a1","enabled":true})]);
+        assert_eq!(metrics["weekly_totals"]["completed"], 1);
+        assert_eq!(metrics["weekly_totals"]["findings"], 1);
+        assert_eq!(metrics["weekly_totals"]["tokens"], 0);
+        assert_eq!(
+            metrics["weekly_totals"]["runs_with_usage"], 0,
+            "a week nobody measured is told apart from a week that spent nothing"
+        );
     }
 
     #[test]

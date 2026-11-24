@@ -342,7 +342,15 @@ function App() {
   };
   const setUpdateChannel = async (channel: string) => {
     try {
-      await settleUpdate(await api("/updates/channel", "POST", { channel }));
+      const result = await api<Obj>("/updates/channel", "POST", { channel });
+      if (result?.dropped_pending) {
+        // The queue was accepted on the other channel; say out loud that
+        // changing it gave that promise up.
+        setError(
+          `The queued update to v${String(result.dropped_pending).replace(/^v/, "")} was dropped: that release is not on the ${channel} channel.`,
+        );
+      }
+      await settleUpdate(result);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -1251,7 +1259,7 @@ function Overview({
           value={tokens.runs_with_usage ? tokens.total : "—"}
           hint={
             tokens.runs_with_usage
-              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${d.runs ?? 0} runs`
+              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${(d.completed_runs ?? 0) + (d.failed_runs ?? 0)} finished runs`
               : "No token counts reported yet"
           }
           icon={Sparkles}
@@ -1285,7 +1293,12 @@ function Overview({
             <b>{count(totals.findings)}</b> findings
           </span>
           <span>
-            <b>{compact(totals.tokens)}</b> tokens
+            <b>
+              {totals.runs_with_usage
+                ? compact(totals.tokens)
+                : "not reported"}
+            </b>{" "}
+            tokens
           </span>
           <span>
             <b>{count(d.prs_last_7d)}</b> pull requests
@@ -2179,7 +2192,9 @@ function SettingsPage({
               <div className="settings-line" role="alert">
                 <span>Last automatic update failed</span>
                 <b>
-                  v{data.updates.install_error.tag}: {data.updates.install_error.message}
+                  v{data.updates.install_error.version ||
+                    String(data.updates.install_error.tag || "").replace(/^v/, "")}:{" "}
+                  {data.updates.install_error.message}
                 </b>
               </div>
             )}
@@ -2187,8 +2202,9 @@ function SettingsPage({
               <div className="settings-line">
                 <span>Queued update</span>
                 <b>
-                  v{data.updates.pending_install} installs as soon as the running automations
-                  finish
+                  v{data.updates.pending_version ||
+                    String(data.updates.pending_install).replace(/^v/, "")} installs as soon as
+                  the running automations finish
                 </b>
               </div>
             )}
@@ -2271,7 +2287,8 @@ function SettingsPage({
                 disabled={updating}
                 onClick={() => void cancelQueuedUpdate()}
               >
-                Cancel the queued update to v{data.updates.pending_install}
+                Cancel the queued update to v{data.updates.pending_version ||
+                  String(data.updates.pending_install).replace(/^v/, "")}
               </button>
             )}
             <p>
