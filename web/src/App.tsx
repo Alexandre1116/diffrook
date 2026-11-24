@@ -2186,7 +2186,9 @@ function SettingsPage({
                   v{latest.version} failed to install {latest.install_failures} time(s);{" "}
                   {latest.install_parked
                     ? "automatic updates leave it alone until you retry"
-                    : "it will be retried"}
+                    : data.updates.policy === "automatic"
+                      ? "it will be retried"
+                      : "install it again to retry"}
                 </b>
               </div>
             ) : null}
