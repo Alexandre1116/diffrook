@@ -83,6 +83,8 @@ body {
 .chart-legend,
 .chart-col small,
 .chart-foot,
+.severity-caption,
+.stat-loading,
 .chart-empty {
   color: #9aa9bd;
 }

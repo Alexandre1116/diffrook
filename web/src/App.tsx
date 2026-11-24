@@ -638,7 +638,7 @@ function App() {
               openRun={runDetail}
               refresh={reload}
               version={status.version}
-              release={release}
+              release={release && !updatePrompt ? release : null}
               dismissUpdate={dismissUpdate}
               applyUpdate={applyUpdate}
               updating={updating}
@@ -914,15 +914,16 @@ function App() {
         >
           <div className="form-stack">
             <p>
-              This instance runs v{status.version}.{" "}
+              This instance runs v{status.version}; v{updatePrompt.version} is the newest release on
+              your channel.{" "}
               {updatePrompt.prerelease
-                ? "This is a pre-release on your beta channel."
-                : "It is the newest release on your channel."}{" "}
+                ? "It is a pre-release from your beta channel. "
+                : ""}
               {updatePrompt.rolled_back
                 ? "This release failed to start here and was rolled back; install it again only if you know why. "
                 : updatePrompt.supported
                   ? "Installing it restarts this container once your running automations finish. "
-                  : "There is no update package for this platform, so update through your container workflow. "}
+                  : `${updatePrompt.unsupported_reason || "There is no usable update package for this platform"}, so update through your container workflow. `}
               {updatePrompt.install_failures
                 ? `Automatic installs of it have failed ${updatePrompt.install_failures} time(s). `
                 : ""}
@@ -1251,7 +1252,7 @@ function Overview({
           hint={
             tokens.runs_with_usage
               ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${d.runs ?? 0} runs`
-              : "No provider has reported token counts here yet"
+              : "No token counts reported yet"
           }
           icon={Sparkles}
         />
@@ -2024,6 +2025,15 @@ function SettingsPage({
   const beta = data.updates.channel === "beta";
   const [checking, setChecking] = useState(false),
     [checkError, setCheckError] = useState("");
+  const cancelQueuedUpdate = async () => {
+    try {
+      await api("/updates/cancel", "POST", {});
+      notice("The queued update was cancelled.");
+      await reload();
+    } catch (e) {
+      notice((e as Error).message);
+    }
+  };
   const checkNow = async () => {
     setChecking(true);
     setCheckError("");
@@ -2217,9 +2227,9 @@ function SettingsPage({
                   value={data.updates.policy || "manual"}
                   onChange={(e) => void updatePolicy(e.target.value)}
                 >
-                  <option value="manual">Manual: I approve each install</option>
+                  <option value="manual">Manual (I approve each one)</option>
                   <option value="automatic">
-                    Automatic: install new releases by themselves
+                    Automatic (installed for me)
                   </option>
                 </select>
                 <small>
@@ -2252,7 +2262,16 @@ function SettingsPage({
                   ? "Installing…"
                   : latest.supported
                     ? `Install v${latest.version}`
-                    : "No package for this platform"}
+                    : latest.unsupported_reason || "No package for this platform"}
+              </button>
+            )}
+            {data.updates.pending_install && (
+              <button
+                className="btn secondary"
+                disabled={updating}
+                onClick={() => void cancelQueuedUpdate()}
+              >
+                Cancel the queued update to v{data.updates.pending_install}
               </button>
             )}
             <p>

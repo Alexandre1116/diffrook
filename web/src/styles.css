@@ -2543,12 +2543,15 @@ button:disabled {
   text-transform: capitalize;
 }
 .severity-caption {
-  color: #6f7c92;
+  color: #56637a;
   font:
     9px "DM Mono",
     monospace;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+}
+.chart-legend span {
+  white-space: nowrap;
 }
 .stat-loading {
   min-height: 104px;

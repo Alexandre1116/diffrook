@@ -60,6 +60,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::post(crate::updates::apply),
         )
         .route(
+            "/api/updates/cancel",
+            axum::routing::post(crate::updates::cancel_pending),
+        )
+        .route(
             "/api/connections",
             get(list_connections).post(create_connection),
         )
@@ -1379,9 +1383,15 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
                 }
             }
         }
-        let found = run["output"]["findings"]
-            .as_array()
-            .map_or(0, |list| list.len());
+        // Findings belong to runs that finished: the card says "from N completed
+        // runs", so a partial run's leftovers must not inflate the total.
+        let found = if status == RUN_SUCCEEDED {
+            run["output"]["findings"]
+                .as_array()
+                .map_or(0, |list| list.len())
+        } else {
+            0
+        };
         findings += found as i64;
         if let Some(bucket) = day.and_then(|value| days.get_mut(&value)) {
             // Severity breakdown follows the chart window, so the row under the

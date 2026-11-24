@@ -282,6 +282,95 @@ async fn manual_release_check_is_authenticated_and_throttled() {
 }
 
 #[tokio::test]
+async fn a_queued_update_survives_and_can_be_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    let cookie = admin(&app, &state).await;
+    // A release the updater has already checked, and a run that is in progress.
+    *state.updates.write().await = json!({
+        "current_version": env!("CARGO_PKG_VERSION"),
+        "releases": [{
+            "tag": "v9.9.9", "version": "9.9.9", "newer": true, "prerelease": false,
+            "supported": true, "url": "https://github.com/Alexandre1116/diffrook/releases/tag/v9.9.9",
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1024
+        }],
+        "checked_at": chrono::Utc::now().to_rfc3339(),
+        "error": null
+    });
+    let now = chrono::Utc::now().to_rfc3339();
+    let run = json!({"id":"busy","automation_id":"a1","status":"running","created_at":now});
+    sqlx::query("INSERT INTO runs(id,automation_id,body,created_at,status) VALUES('busy','a1',?,?, 'running')")
+        .bind(run.to_string())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v9.9.9"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["queued"], true,
+        "the install waits for the running job"
+    );
+    assert_eq!(body["restarting"], false);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(
+        updates["pending_install"], "v9.9.9",
+        "the request is stored, not just remembered in this process"
+    );
+    // A release without a usable package is refused before anything is queued.
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v0.0.1"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a release this instance has checked"),
+        "{}",
+        body["error"]
+    );
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/cancel",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["pending_install"].is_null(),
+        "cancelling really drops the queued install"
+    );
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/cancel",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing left to cancel");
+}
+
+#[tokio::test]
 async fn strict_inputs_reject_shadow_fields_and_internal_urls_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
