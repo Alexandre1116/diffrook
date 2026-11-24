@@ -204,17 +204,29 @@ const count = (n?: number) => (n ?? 0).toLocaleString();
 const statusClass = (s = "") => `status status-${s.toLowerCase()}`;
 const updateDismissKey = "diffrook.update-dismissed";
 const updatePromptKey = "diffrook.update-prompt-dismissed";
-// A browser remembers which release banners it already refused, so the offer
-// stays out of the way until a newer release appears.
-function readDismissedReleases(): Set<string> {
-  const tags = new Set<string>();
-  for (let i = 0; i < window.localStorage.length; i += 1) {
-    const key = window.localStorage.key(i);
-    if (key?.startsWith(`${updateDismissKey}.`))
-      tags.add(key.slice(updateDismissKey.length + 1));
+// A browser or a privacy extension can block storage, so every read and write
+// goes through these helpers: losing a dismissal must never break the app.
+const readStored = (key: string): string | null => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
   }
-  return tags;
-}
+};
+const writeStored = (key: string, value: string) => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage is unavailable; the offer simply comes back next visit.
+  }
+};
+// Only the last few refused releases are kept, so the keys never pile up.
+const readTagList = (key: string): string[] =>
+  (readStored(key) || "").split(",").filter(Boolean).slice(-10);
+const mergeTag = (list: string[], tag: string): string[] =>
+  [...new Set([...list, tag])].slice(-10);
+const rememberTag = (key: string, tag: string) =>
+  writeStored(key, mergeTag(readTagList(key), tag).join(","));
 const compact = (n?: number) =>
   n && n >= 1000
     ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
@@ -263,7 +275,11 @@ function App() {
   const [showStarPrompt, setShowStarPrompt] = useState(false);
   const [updatePrompt, setUpdatePrompt] = useState<Obj | null>(null),
     [updating, setUpdating] = useState(false),
-    [dismissedTags, setDismissedTags] = useState<Set<string>>(readDismissedReleases);
+    [dismissedTags, setDismissedTags] = useState<string[]>(() =>
+      readTagList(updateDismissKey),
+    ),
+    [askedTags, setAskedTags] = useState<string[]>(() => readTagList(updatePromptKey)),
+    [loaded, setLoaded] = useState(false);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
@@ -281,6 +297,7 @@ function App() {
           api<PlanCatalog>("/plans"),
         ]);
       setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates, license, catalog });
+      setLoaded(true);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -289,14 +306,19 @@ function App() {
   }, [status?.authenticated]);
   // Update settings may stage an update; the server then restarts and stops answering.
   const settleUpdate = async (result: Obj) => {
-    if (!result?.restarting) return reload();
-    setNotice("Update installed. Reconnecting to Diffrook…");
-    window.setTimeout(() => window.location.reload(), 2500);
+    if (result?.restarting) {
+      setNotice("Update installed. Reconnecting to Diffrook…");
+      window.setTimeout(() => window.location.reload(), 2500);
+      return;
+    }
+    if (result?.deferred)
+      setNotice("An automation is still running; the update installs as soon as it finishes.");
+    return reload();
   };
-  const release =
-    data.updates.latest && !dismissedTags.has(data.updates.latest.tag)
-      ? data.updates.latest
-      : null;
+  // Settings always tells the truth about the newest release; only the banner
+  // and the popup respect what this browser chose to ignore.
+  const latest = data.updates.latest || null;
+  const release = latest && !dismissedTags.includes(latest.tag) ? latest : null;
   const applyUpdate = async (tag: string) => {
     setUpdating(true);
     try {
@@ -322,23 +344,23 @@ function App() {
     }
   };
   const dismissUpdate = (tag: string) => {
-    window.localStorage.setItem(`${updateDismissKey}.${tag}`, "1");
-    setDismissedTags((current) => new Set([...current, tag]));
+    rememberTag(updateDismissKey, tag);
+    setDismissedTags((current) => mergeTag(current, tag));
     setUpdatePrompt(null);
   };
   const closeUpdatePrompt = (tag: string) => {
-    window.localStorage.setItem(`${updatePromptKey}.${tag}`, "1");
+    rememberTag(updatePromptKey, tag);
+    setAskedTags((current) => mergeTag(current, tag));
     setUpdatePrompt(null);
   };
-  // One popup per release. The banner keeps the offer visible after the popup
-  // is closed, and neither comes back for a release this browser refused.
+  // One popup per release, and never stacked over a form the admin is filling in.
   const promptShownFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!release?.supported || promptShownFor.current === release.tag) return;
-    if (window.localStorage.getItem(`${updatePromptKey}.${release.tag}`)) return;
+    if (!release || modal || detail) return;
+    if (promptShownFor.current === release.tag || askedTags.includes(release.tag)) return;
     promptShownFor.current = release.tag;
     setUpdatePrompt(release);
-  }, [release]);
+  }, [release, askedTags, modal, detail]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -598,6 +620,7 @@ function App() {
             <Overview
               data={data}
               busy={busy}
+              loaded={loaded}
               go={setPage}
               openRun={runDetail}
               refresh={reload}
@@ -746,7 +769,7 @@ function App() {
               notice={setNotice}
               reload={reload}
               version={status.version}
-              release={release}
+              latest={latest}
               updating={updating}
               updatePolicy={setUpdatePolicy}
               updateChannel={setUpdateChannel}
@@ -872,16 +895,20 @@ function App() {
       )}
       {updatePrompt && (
         <Modal
-          title={`Diffrook ${updatePrompt.version} is available`}
+          title={`Diffrook v${updatePrompt.version} is available`}
+          eyebrow="NEW RELEASE"
           close={() => closeUpdatePrompt(updatePrompt.tag)}
         >
           <div className="form-stack">
             <p>
-              This instance runs {status.version}.{" "}
+              This instance runs v{status.version}.{" "}
               {updatePrompt.prerelease
-                ? "This is a pre-release from your beta channel."
-                : "It is the newest stable release on GitHub."}{" "}
-              Install it now, or set an update policy in Settings.
+                ? "This is a pre-release on your beta channel."
+                : "It is the newest release on your channel."}{" "}
+              {updatePrompt.supported
+                ? "Installing it restarts this container once your running automations finish."
+                : "There is no update package for this platform, so update through your container workflow."}{" "}
+              Update policy and release channel live in Settings.
             </p>
             <div className="form-actions">
               <button
@@ -899,18 +926,20 @@ function App() {
               >
                 Release notes <ExternalLink size={14} />
               </a>
-              <button
-                className="btn primary"
-                type="button"
-                disabled={updating}
-                onClick={() => {
-                  setUpdatePrompt(null);
-                  void applyUpdate(updatePrompt.tag);
-                }}
-              >
-                <ArrowDownRight size={15} />
-                {updating ? "Installing…" : "Install update"}
-              </button>
+              {updatePrompt.supported && (
+                <button
+                  className="btn primary"
+                  type="button"
+                  disabled={updating}
+                  onClick={() => {
+                    setUpdatePrompt(null);
+                    void applyUpdate(updatePrompt.tag);
+                  }}
+                >
+                  <ArrowDownRight size={15} />
+                  {updating ? "Installing…" : "Install update"}
+                </button>
+              )}
             </div>
           </div>
         </Modal>
@@ -1038,6 +1067,7 @@ function Auth({
 function Overview({
   data,
   busy,
+  loaded,
   go,
   openRun,
   refresh,
@@ -1049,6 +1079,7 @@ function Overview({
 }: {
   data: any;
   busy: boolean;
+  loaded: boolean;
   go: (p: Page) => void;
   openRun: (r: Obj) => void;
   refresh: () => void;
@@ -1063,6 +1094,10 @@ function Overview({
   const weekly: Obj[] = d.weekly || [];
   const totals = d.weekly_totals || {};
   const tokens = d.tokens || {};
+  const severities = d.severities || {};
+  // First-run guidance is history, not current state: it stays away once this
+  // instance has had a connection, even if that connection was removed later.
+  const firstRun = !data.connections.length && !d.connection_configured;
   const steps: {
     ok: boolean;
     label: string;
@@ -1115,12 +1150,14 @@ function Overview({
         <div className="update-banner" role="status">
           <ArrowDownRight size={17} />
           <span className="update-copy">
-            <b>Diffrook {release.version} is available</b>
+            <b>Diffrook v{release.version} is available</b>
             <small>
-              You are running {version}.{" "}
-              {release.supported
-                ? "Installing restarts this instance for a few seconds."
-                : "No update package for this platform yet."}
+              This instance runs v{version}.{" "}
+              {release.rolled_back
+                ? "This release failed to start here and was rolled back; install it again only if you know why."
+                : release.supported
+                  ? "Installing restarts this instance for a few seconds."
+                  : "No update package for this platform yet, so update through your container workflow."}
             </small>
           </span>
           <a
@@ -1141,11 +1178,11 @@ function Overview({
             </button>
           )}
           <button className="text-btn" onClick={() => dismissUpdate(release.tag)}>
-            Dismiss
+            Hide
           </button>
         </div>
       )}
-      {!data.connections.length && (
+      {loaded && firstRun && (
         <div className="welcome-banner">
           <div className="banner-icon">
             <Mark />
@@ -1185,8 +1222,12 @@ function Overview({
         />
         <Stat
           label="Model tokens"
-          value={tokens.total}
-          hint={`${compact(tokens.input)} in · ${compact(tokens.output)} out`}
+          value={tokens.runs_with_usage ? tokens.total : "—"}
+          hint={
+            tokens.runs_with_usage
+              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out`
+              : "Token counts start with this version"
+          }
           icon={Sparkles}
         />
       </div>
@@ -1194,7 +1235,7 @@ function Overview({
         <div className="panel-title">
           <div>
             <h3>Automation activity</h3>
-            <p>Runs completed and failed over the last 7 days</p>
+            <p>Runs completed and failed over the last 7 days, grouped by UTC day</p>
           </div>
           <div className="chart-legend">
             <span>
@@ -1222,6 +1263,17 @@ function Overview({
             <b>{count(d.prs_last_7d)}</b> pull requests
           </span>
         </div>
+        {Object.keys(severities).length > 0 && (
+          <div className="severity-row" aria-label="Findings by severity">
+            {["critical", "high", "medium", "low", "info"]
+              .filter((level) => severities[level])
+              .map((level) => (
+                <span key={level} className={`severity severity-${level}`}>
+                  {level} {count(severities[level])}
+                </span>
+              ))}
+          </div>
+        )}
       </section>
       <div className="section-heading">
         <div>
@@ -1244,7 +1296,7 @@ function Overview({
           />
         )}
       </div>
-      {!steps.every((s) => s.ok) && (
+      {loaded && !steps.every((s) => s.ok) && (
         <div className="panel-card setup-card">
           <div className="panel-title">
             <div>
@@ -1349,7 +1401,7 @@ function Stat({
   icon: Icon,
 }: {
   label: string;
-  value: number | undefined;
+  value: number | string | undefined;
   hint: string;
   icon: any;
 }) {
@@ -1359,7 +1411,7 @@ function Stat({
         <span>{label.toUpperCase()}</span>
         <Icon size={17} />
       </div>
-      <strong>{count(value)}</strong>
+      <strong>{typeof value === "string" ? value : count(value)}</strong>
       <small>{hint}</small>
     </div>
   );
@@ -1924,7 +1976,7 @@ function SettingsPage({
   notice,
   reload,
   version,
-  release,
+  latest,
   updating,
   updatePolicy,
   updateChannel,
@@ -1934,7 +1986,7 @@ function SettingsPage({
   notice: (s: string) => void;
   reload: () => Promise<void>;
   version: string;
-  release: Obj | null;
+  latest: Obj | null;
   updating: boolean;
   updatePolicy: (mode: string) => Promise<void>;
   updateChannel: (channel: string) => Promise<void>;
@@ -2017,10 +2069,6 @@ function SettingsPage({
               service.
             </p>
             <div className="settings-line">
-              <span>Version</span>
-              <b>v{version}</b>
-            </div>
-            <div className="settings-line">
               <span>Automations</span>
               <b>{data.automations.length}</b>
             </div>
@@ -2049,9 +2097,23 @@ function SettingsPage({
               <b>v{version}</b>
             </div>
             <div className="settings-line">
-              <span>Latest {beta ? "beta" : "stable"} release</span>
-              <b>{release ? `v${release.version}` : "Up to date"}</b>
+              <span>Latest release on your channel</span>
+              <b>
+                {latest
+                  ? `v${latest.version}`
+                  : data.updates.error
+                    ? "Unknown"
+                    : data.updates.checked_at
+                      ? "Up to date"
+                      : "Not checked yet"}
+              </b>
             </div>
+            {latest?.rolled_back && (
+              <div className="settings-line">
+                <span>Last attempt</span>
+                <b>v{latest.version} failed to start and was rolled back</b>
+              </div>
+            )}
             <div className="settings-line">
               <span>Last release check</span>
               <b>{date(data.updates.checked_at)}</b>
@@ -2111,24 +2173,24 @@ function SettingsPage({
                 </small>
               </label>
             </div>
-            {release && (
+            {latest && (
               <button
                 className="btn primary"
-                disabled={updating || !release.supported}
-                onClick={() => void applyUpdate(release.tag)}
+                disabled={updating || !latest.supported}
+                onClick={() => void applyUpdate(latest.tag)}
               >
                 <ArrowDownRight size={15} />
                 {updating
                   ? "Installing…"
-                  : release.supported
-                    ? `Install v${release.version}`
+                  : latest.supported
+                    ? `Install v${latest.version}`
                     : "No package for this platform"}
               </button>
             )}
             <p>
               {data.updates.policy === "automatic"
-                ? "New releases download from GitHub, restart this container, and roll back if the new version fails to start. Back up your data volume first."
-                : "Installing an update restarts this container for a few seconds."}
+                ? "New releases download from GitHub, wait for running automations to finish, restart this container, and roll back if the new version fails to start. Back up your data volume first."
+                : "Installing an update waits for running automations, then restarts this container for a few seconds. A release that fails to start is rolled back."}
             </p>
             <a
               className="text-btn"
@@ -2184,11 +2246,13 @@ function SettingsPage({
 
 function Modal({
   title,
+  eyebrow = "DIFFROOK CONFIGURATION",
   close,
   wide,
   children,
 }: {
   title: string;
+  eyebrow?: string;
   close: () => void;
   wide?: boolean;
   children: React.ReactNode;
@@ -2216,7 +2280,7 @@ function Modal({
       >
         <div className="modal-header">
           <div>
-            <div className="eyebrow">DIFFROOK CONFIGURATION</div>
+            <div className="eyebrow">{eyebrow}</div>
             <h2 id={titleId}>{title}</h2>
           </div>
           <button className="icon-btn" aria-label="Close dialog" onClick={close}>

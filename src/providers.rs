@@ -78,21 +78,39 @@ pub async fn test_provider(provider: &Value, client: &reqwest::Client) -> Result
     Ok(format!("Connected to {kind}; configured model is {model}"))
 }
 
-/// Tokens reported by the provider for one model call. Providers that omit
-/// usage metadata leave both sides at zero, so totals stay additive rather than
-/// pretending a number exists.
+/// Tokens a provider reported for one model call. `reported` separates a
+/// measured zero from a provider that never sent usage metadata, so the
+/// overview can say "unavailable" instead of inventing a number.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenUsage {
-    pub input: u64,
-    pub output: u64,
+    pub input: Option<u64>,
+    pub output: Option<u64>,
+    pub reported: bool,
 }
 
 impl TokenUsage {
     pub fn total(&self) -> u64 {
-        self.input + self.output
+        self.input.unwrap_or(0) + self.output.unwrap_or(0)
+    }
+    pub fn add(&mut self, other: TokenUsage) {
+        self.input = Some(
+            self.input
+                .unwrap_or(0)
+                .saturating_add(other.input.unwrap_or(0)),
+        );
+        self.output = Some(
+            self.output
+                .unwrap_or(0)
+                .saturating_add(other.output.unwrap_or(0)),
+        );
+        self.reported |= other.reported;
     }
     pub fn json(&self) -> Value {
-        json!({"input_tokens": self.input, "output_tokens": self.output})
+        if self.reported {
+            json!({"input_tokens": self.input, "output_tokens": self.output})
+        } else {
+            json!({"input_tokens": null, "output_tokens": null})
+        }
     }
 }
 
@@ -196,20 +214,27 @@ pub async fn complete(
 /// counts, Anthropic and OpenAI compatible endpoints report usage objects, and
 /// some OpenAI-compatible gateways use the Anthropic naming.
 pub fn usage_for(kind: &str, body: &Value) -> TokenUsage {
-    let number = |value: Option<&Value>| value.and_then(Value::as_u64).unwrap_or(0);
-    if kind == "ollama" {
-        return TokenUsage {
+    let number = |value: Option<&Value>| value.and_then(Value::as_u64);
+    let read = if kind == "ollama" {
+        TokenUsage {
             input: number(body.get("prompt_eval_count")),
             output: number(body.get("eval_count")),
+            reported: false,
+        }
+    } else {
+        let usage = body.get("usage");
+        let pick = |primary: &str, secondary: &str| {
+            number(usage.and_then(|u| u.get(primary).or_else(|| u.get(secondary))))
         };
-    }
-    let usage = body.get("usage");
-    let pick = |primary: &str, secondary: &str| {
-        number(usage.and_then(|u| u.get(primary).or_else(|| u.get(secondary))))
+        TokenUsage {
+            input: pick("input_tokens", "prompt_tokens"),
+            output: pick("output_tokens", "completion_tokens"),
+            reported: false,
+        }
     };
     TokenUsage {
-        input: pick("input_tokens", "prompt_tokens"),
-        output: pick("output_tokens", "completion_tokens"),
+        reported: read.input.is_some() || read.output.is_some(),
+        ..read
     }
 }
 
@@ -259,19 +284,33 @@ mod tests {
             "openai",
             &json!({"usage": {"prompt_tokens": 900, "completion_tokens": 120}}),
         );
-        assert_eq!(openai.input, 900);
-        assert_eq!(openai.output, 120);
+        assert_eq!(openai.input, Some(900));
+        assert_eq!(openai.output, Some(120));
+        assert!(openai.reported);
         assert_eq!(openai.total(), 1020);
         let anthropic = usage_for(
             "anthropic",
             &json!({"usage": {"input_tokens": 40, "output_tokens": 8}}),
         );
-        assert_eq!((anthropic.input, anthropic.output), (40, 8));
+        assert_eq!((anthropic.input, anthropic.output), (Some(40), Some(8)));
         let ollama = usage_for(
             "ollama",
             &json!({"prompt_eval_count": 700, "eval_count": 90}),
         );
-        assert_eq!((ollama.input, ollama.output), (700, 90));
-        assert_eq!(usage_for("openai", &json!({})).total(), 0);
+        assert_eq!((ollama.input, ollama.output), (Some(700), Some(90)));
+        let missing = usage_for("openai", &json!({}));
+        assert!(!missing.reported, "no usage is not the same as no spend");
+        assert_eq!(missing.total(), 0);
+        let partial = usage_for("openai", &json!({"usage": {"completion_tokens": 7}}));
+        assert_eq!((partial.input, partial.output), (None, Some(7)));
+        let mut running = TokenUsage::default();
+        running.add(openai);
+        running.add(missing);
+        assert_eq!((running.input, running.output), (Some(900), Some(120)));
+        assert!(running.reported);
+        assert_eq!(
+            TokenUsage::default().json(),
+            json!({"input_tokens": null, "output_tokens": null})
+        );
     }
 }
