@@ -240,6 +240,41 @@ async fn update_policy_is_authenticated_and_persisted() {
 }
 
 #[tokio::test]
+async fn manual_release_check_is_authenticated_and_throttled() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    assert_eq!(
+        request(&app, "POST", "/api/updates/check", Some(json!({})), None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let cookie = admin(&app, &state).await;
+    // A check that just happened must not spend another request from GitHub's
+    // limited unauthenticated quota, the limit that used to strand instances.
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.checked_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/check",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("Already checked"));
+}
+
+#[tokio::test]
 async fn strict_inputs_reject_shadow_fields_and_internal_urls_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let state = diffrook::core::AppState::new(dir.path()).await.unwrap();

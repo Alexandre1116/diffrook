@@ -361,6 +361,11 @@ function App() {
     promptShownFor.current = release.tag;
     setUpdatePrompt(release);
   }, [release, askedTags, modal, detail]);
+  // The offer can change while the popup is open, for example when the release
+  // channel is switched, so an out-of-date popup never offers another release.
+  useEffect(() => {
+    if (updatePrompt && (!release || release.tag !== updatePrompt.tag)) setUpdatePrompt(null);
+  }, [release, updatePrompt]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -1156,7 +1161,7 @@ function Overview({
               {release.rolled_back
                 ? "This release failed to start here and was rolled back; install it again only if you know why."
                 : release.supported
-                  ? "Installing restarts this instance for a few seconds."
+                  ? "Installing waits for running automations, then restarts this container for a few seconds."
                   : "No update package for this platform yet, so update through your container workflow."}
             </small>
           </span>
