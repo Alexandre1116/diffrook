@@ -1359,12 +1359,24 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
     let mut runs_with_usage = 0usize;
+    // Runs that reached a model at all: a queued or still-running run can never
+    // report usage, so counting it as an unmeasured run would make the "measured
+    // in N of M runs" figure able to exceed M.
+    let mut model_runs = 0usize;
     let mut severities: std::collections::BTreeMap<String, i64> = Default::default();
     let mut used_automations: HashSet<String> = Default::default();
     let mut prs: HashSet<String> = Default::default();
     let mut weekly_prs: HashSet<String> = Default::default();
     for run in runs {
         let status = run["status"].as_str().unwrap_or("");
+        // A run whose provider was actually asked something. A cancelled run may
+        // already have paid for its call, so it belongs with the spending runs;
+        // one still queued or running has nothing to measure, and belongs on
+        // neither side of "measured in N of M runs".
+        let reached_model = status == RUN_SUCCEEDED || status == "failed" || status == "cancelled";
+        if reached_model {
+            model_runs += 1;
+        }
         if status == RUN_SUCCEEDED {
             completed += 1;
         } else if status == "failed" {
@@ -1411,15 +1423,19 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
                 bucket.failed += 1;
             }
             bucket.findings += found as i64;
-            if let Some((input, output)) = run_tokens(run) {
-                bucket.tokens = bucket.tokens.saturating_add(input + output);
-                bucket.measured += 1;
+            if reached_model {
+                if let Some((input, output)) = run_tokens(run) {
+                    bucket.tokens = bucket.tokens.saturating_add(input + output);
+                    bucket.measured += 1;
+                }
             }
         }
-        if let Some((input, output)) = run_tokens(run) {
-            runs_with_usage += 1;
-            input_tokens = input_tokens.saturating_add(input);
-            output_tokens = output_tokens.saturating_add(output);
+        if reached_model {
+            if let Some((input, output)) = run_tokens(run) {
+                runs_with_usage += 1;
+                input_tokens = input_tokens.saturating_add(input);
+                output_tokens = output_tokens.saturating_add(output);
+            }
         }
     }
     let weekly: Vec<Value> = days
@@ -1461,6 +1477,7 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
             "output": output_tokens,
             "total": input_tokens + output_tokens,
             "runs_with_usage": runs_with_usage,
+            "model_runs": model_runs,
         },
         "weekly_severities": severities,
         "weekly": weekly,
@@ -1964,6 +1981,46 @@ mod tests {
             metrics["weekly_totals"]["runs_with_usage"], 6,
             "the week's token figure stands on the runs that reported usage"
         );
+    }
+
+    #[test]
+    fn a_run_that_never_reached_a_model_is_neither_spend_nor_a_missed_measurement() {
+        let today = chrono::Utc::now().to_rfc3339();
+        let runs = vec![
+            metric_run(
+                RUN_SUCCEEDED,
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{"findings":[],"usage":{"input_tokens":10,"output_tokens":1}}}),
+            ),
+            // Cancelled after the provider answered: the tokens were really spent.
+            metric_run(
+                "cancelled",
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"usage":{"input_tokens":7,"output_tokens":2},"output":{}}),
+            ),
+            // Queued work can report nothing, so it must not appear on either
+            // side of "measured in N of M runs", nor as spend.
+            metric_run(
+                "queued",
+                today.clone(),
+                json!({"started_at": null, "finished_at": null, "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{"usage":{"input_tokens":99,"output_tokens":99}}}),
+            ),
+        ];
+        let metrics = run_metrics(&runs, &[json!({"id":"a1","enabled":true})]);
+        assert_eq!(metrics["tokens"]["model_runs"], 2);
+        assert_eq!(metrics["tokens"]["runs_with_usage"], 2);
+        assert!(
+            metrics["tokens"]["runs_with_usage"].as_u64()
+                <= metrics["tokens"]["model_runs"].as_u64(),
+            "the measured count can never exceed the runs it is divided by"
+        );
+        assert_eq!(
+            metrics["tokens"]["total"], 20,
+            "a run that never reached a provider is not spend: {}",
+            metrics["tokens"]["total"]
+        );
+        assert_eq!(metrics["weekly_totals"]["runs_with_usage"], 2);
+        assert_eq!(metrics["weekly_totals"]["tokens"], 20);
     }
 
     #[test]

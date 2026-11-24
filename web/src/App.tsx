@@ -1259,7 +1259,7 @@ function Overview({
           value={tokens.runs_with_usage ? tokens.total : "—"}
           hint={
             tokens.runs_with_usage
-              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${(d.completed_runs ?? 0) + (d.failed_runs ?? 0)} finished runs`
+              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${tokens.model_runs ?? 0} runs that reached a model`
               : "No token counts reported yet"
           }
           icon={Sparkles}
