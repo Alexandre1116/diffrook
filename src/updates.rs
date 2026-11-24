@@ -260,6 +260,7 @@ async fn load_releases(state: &AppState) -> std::result::Result<Value, CheckFail
             "url": release["html_url"], "newer": newer,
             "rolled_back": !failed.is_empty() && release["tag_name"].as_str() == Some(failed),
             "install_failures": release_failures(&install_failures, release["tag_name"].as_str().unwrap_or("")),
+            "install_parked": release_parked(&install_failures, release["tag_name"].as_str().unwrap_or("")),
             "supported": problem.is_none(), "unsupported_reason": problem,
             "asset_url": asset.and_then(|a| a["browser_download_url"].as_str()),
             "asset_digest": asset.and_then(|a| a["digest"].as_str()),
@@ -391,10 +392,16 @@ fn release_failures(
     failures: &std::collections::HashMap<String, FailureCount>,
     tag: &str,
 ) -> Value {
+    // A count that has lapsed no longer holds anything back, so it is not shown.
     match failures.get(tag) {
-        Some(record) => json!(record.count),
-        None => Value::Null,
+        Some(record) if record.is_fresh() => json!(record.count),
+        _ => Value::Null,
     }
+}
+
+/// Whether automatic installs leave this release alone until someone retries.
+fn release_parked(failures: &std::collections::HashMap<String, FailureCount>, tag: &str) -> bool {
+    failures.get(tag).is_some_and(FailureCount::parked)
 }
 
 /// The last automatic install that failed, kept in the database so the reason
@@ -466,6 +473,23 @@ fn stale(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Stale>().is_some()
 }
 
+/// An automation started while the package was being fetched. The install is
+/// still wanted; it waits for a quiet moment like any other deferred update.
+#[derive(Debug)]
+struct Busy;
+
+impl std::fmt::Display for Busy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("the install waits for running automations to finish")
+    }
+}
+
+impl std::error::Error for Busy {}
+
+fn busy(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Busy>().is_some()
+}
+
 /// Counts a failed install and leaves the reason where Settings can show it.
 /// Only a broken package counts towards leaving a release alone.
 async fn record_install_failure(state: &AppState, tag: &str, message: &str, counted: bool) {
@@ -515,6 +539,19 @@ async fn record_install_failure(state: &AppState, tag: &str, message: &str, coun
     state.updates.write().await["install_error"] = error;
 }
 
+/// After a successful staging: the release's count and the last failure message
+/// no longer describe anything that is still going to happen.
+async fn forget_install_failures(state: &AppState, tag: &str) {
+    clear_install_failure(state, tag).await;
+    if let Err(e) = sqlx::query("DELETE FROM app_settings WHERE key='updates.install_error'")
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not clear the last update failure: {e:#}");
+    }
+    state.updates.write().await["install_error"] = Value::Null;
+}
+
 /// An explicit install attempt restarts the count for that release, so an
 /// administrator who retries on purpose is not blocked by earlier failures.
 async fn clear_install_failure(state: &AppState, tag: &str) {
@@ -547,8 +584,9 @@ async fn overlay_failures(
     let mut value = state.updates.write().await;
     if let Some(releases) = value["releases"].as_array_mut() {
         for release in releases.iter_mut() {
-            release["install_failures"] =
-                release_failures(counts, release["tag"].as_str().unwrap_or(""));
+            let tag = release["tag"].as_str().unwrap_or("").to_owned();
+            release["install_failures"] = release_failures(counts, &tag);
+            release["install_parked"] = json!(release_parked(counts, &tag));
         }
     }
 }
@@ -766,6 +804,12 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
                     );
                     return Ok(AutomaticOutcome::Idle);
                 }
+                if busy(&e) {
+                    // The request stays queued untouched and runs once the
+                    // automations are done, like one made while they ran.
+                    tracing::info!("the queued update to {} waits: {e:#}", pending.tag);
+                    return Ok(AutomaticOutcome::Deferred);
+                }
                 if stale(&e) {
                     // The channel or the running image overtook the request
                     // during the fetch. Drop it: the page now offers something
@@ -825,6 +869,10 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
         if stale(&e) {
             tracing::info!("the automatic update stopped: {e:#}");
             return Ok(AutomaticOutcome::Idle);
+        }
+        if busy(&e) {
+            tracing::info!("deferring the automatic update to {tag}: {e:#}");
+            return Ok(AutomaticOutcome::Deferred);
         }
         record_install_failure(state, &tag, &format!("{e:#}"), fatal(&e)).await;
         return Err(e);
@@ -1003,10 +1051,12 @@ async fn stage_release(state: &AppState, release: &Value, intent: &Intent<'_>) -
     let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
         .fetch_one(&state.db)
         .await?;
-    anyhow::ensure!(
-        active_runs == 0,
-        "wait for running automations to finish before installing an update"
-    );
+    if active_runs > 0 {
+        return Err(
+            anyhow::anyhow!("an automation started while the package was downloading")
+                .context(Busy),
+        );
+    }
     let data_dir = state.data_dir.clone();
     // extract_release marks what the package got wrong; a job that never
     // reports back is this process's problem, not the release's, so it is not
@@ -1019,6 +1069,8 @@ async fn stage_release(state: &AppState, release: &Value, intent: &Intent<'_>) -
     let tmp = state.data_dir.join("active-update.json.tmp");
     tokio::fs::write(&tmp, serde_json::to_vec(&descriptor)?).await?;
     tokio::fs::rename(tmp, state.data_dir.join("active-update.json")).await?;
+    // The release is installed; whatever failed on the way here is over.
+    forget_install_failures(state, tag).await;
     // The promise is kept, so the request that authorized it goes away here,
     // under the same lock, rather than by whoever asked.
     match intent {
@@ -1188,6 +1240,7 @@ fn offer_value(release: Option<&Value>) -> Value {
             "unsupported_reason": r["unsupported_reason"],
             "rolled_back": r["rolled_back"],
             "install_failures": r["install_failures"],
+            "install_parked": r["install_parked"],
             "published_at": r["published_at"],
             "url": r["url"],
         }),
@@ -1215,11 +1268,20 @@ pub async fn api(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let counts = install_failures(&state).await;
     if let Some(releases) = value["releases"].as_array_mut() {
         for release in releases.iter_mut() {
-            release["install_failures"] =
-                release_failures(&counts, release["tag"].as_str().unwrap_or(""));
+            let tag = release["tag"].as_str().unwrap_or("").to_owned();
+            release["install_failures"] = release_failures(&counts, &tag);
+            release["install_parked"] = json!(release_parked(&counts, &tag));
         }
     }
-    value["install_error"] = install_error(&state).await;
+    // The same rule `refresh` applies: a failure about a release this instance
+    // no longer offers (installed since, withdrawn, other channel) is history.
+    let error = install_error(&state).await;
+    let offered = error["tag"].as_str().is_some_and(|tag| {
+        value["releases"]
+            .as_array()
+            .is_some_and(|rs| rs.iter().any(|r| r["tag"] == tag && r["newer"] == true))
+    });
+    value["install_error"] = if offered { error } else { Value::Null };
     value["policy"] = json!(policy(&state).await.unwrap_or_else(|| "manual".into()));
     value["channel"] = json!(channel(&state).await);
     value["latest"] = offer_in(&value, beta);
@@ -1457,64 +1519,67 @@ pub async fn apply(
         .unwrap_or(0);
     // An explicit request always restarts the failure counter for that release.
     clear_install_failure(&state, tag).await;
-    if active_runs > 0 {
-        // The interface promises an update waits for running automations, so the
-        // request is recorded, with the release metadata that makes it possible,
-        // and carried out when they finish - even if the container restarts in
-        // between and GitHub is unreachable afterwards.
-        let beta = channel(&state).await == "beta";
-        let Some(release) = cached_release(&state, tag).await else {
-            return error(
-                StatusCode::BAD_REQUEST,
-                format!("release {tag} is not a release this instance has checked"),
-            );
-        };
-        if release["newer"] != true || !on_channel(&release, beta) {
-            return error(
-                StatusCode::BAD_REQUEST,
-                format!("release {tag} is not a newer release on this channel"),
-            );
-        }
-        if release["supported"] != true {
-            return error(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "release {tag} cannot be installed here: {}",
-                    release["unsupported_reason"]
-                        .as_str()
-                        .unwrap_or("no usable update package for this platform")
-                ),
-            );
-        }
-        let pending = Pending {
-            tag: tag.to_owned(),
-            release,
-            attempts: 0,
-            next_try: chrono::Utc::now().to_rfc3339(),
-        };
-        // Same gate as the installer and the cancel endpoint, so queuing cannot
-        // land between an installer checking the queue and staging it.
-        let _gate = state.update_lock.lock().await;
-        if let Err(e) = save_pending(&state, &pending).await {
-            return error(StatusCode::INTERNAL_SERVER_ERROR, e);
-        }
-        return Json(json!({"ok":true,"queued":true,"restarting":false})).into_response();
-    }
-    match install(&state, tag).await {
-        Ok(()) => {
-            // The request for this release has now been carried out; anything
-            // queued for a different release stays exactly as it was.
-            if let Some((stored, pending)) = queued_install(&state).await {
-                if pending.tag == tag {
-                    clear_queued(&state, &stored).await;
+    if active_runs == 0 {
+        match install(&state, tag).await {
+            Ok(()) => {
+                // The request for this release has now been carried out; anything
+                // queued for a different release stays exactly as it was.
+                if let Some((stored, pending)) = queued_install(&state).await {
+                    if pending.tag == tag {
+                        clear_queued(&state, &stored).await;
+                    }
                 }
+                return Json(json!({"ok":true,"restarting":true})).into_response();
             }
-            Json(json!({"ok":true,"restarting":true})).into_response()
+            // An automation started during the download: the request is queued
+            // below, exactly as if it had been running when the button was pressed.
+            Err(e) if busy(&e) => {}
+            // A failed attempt leaves the queue alone. Dropping a request that
+            // belongs to another release would lose an instruction nobody withdrew.
+            Err(e) => return error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}")),
         }
-        // A failed attempt leaves the queue alone. Dropping a request that
-        // belongs to another release would lose an instruction nobody withdrew.
-        Err(e) => error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}")),
     }
+    // The interface promises an update waits for running automations, so the
+    // request is recorded, with the release metadata that makes it possible,
+    // and carried out when they finish - even if the container restarts in
+    // between and GitHub is unreachable afterwards.
+    let beta = channel(&state).await == "beta";
+    let Some(release) = cached_release(&state, tag).await else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            format!("release {tag} is not a release this instance has checked"),
+        );
+    };
+    if release["newer"] != true || !on_channel(&release, beta) {
+        return error(
+            StatusCode::BAD_REQUEST,
+            format!("release {tag} is not a newer release on this channel"),
+        );
+    }
+    if release["supported"] != true {
+        return error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "release {tag} cannot be installed here: {}",
+                release["unsupported_reason"]
+                    .as_str()
+                    .unwrap_or("no usable update package for this platform")
+            ),
+        );
+    }
+    let pending = Pending {
+        tag: tag.to_owned(),
+        release,
+        attempts: 0,
+        next_try: chrono::Utc::now().to_rfc3339(),
+    };
+    // Same gate as the installer and the cancel endpoint, so queuing cannot
+    // land between an installer checking the queue and staging it.
+    let _gate = state.update_lock.lock().await;
+    if let Err(e) = save_pending(&state, &pending).await {
+        return error(StatusCode::INTERNAL_SERVER_ERROR, e);
+    }
+    Json(json!({"ok":true,"queued":true,"restarting":false})).into_response()
 }
 
 /// Gives up on a queued install, so the administrator can change their mind.
@@ -2133,6 +2198,70 @@ mod tests {
         still_wanted(&state, &Intent::Direct { tag: "v8.8.8" }, &release)
             .await
             .expect("the release the administrator asked for");
+    }
+
+    #[test]
+    fn the_page_says_a_release_is_held_back_only_while_it_is() {
+        let now = chrono::Utc::now();
+        let ago = |hours: i64| (now - chrono::Duration::hours(hours)).to_rfc3339();
+        let failures = std::collections::HashMap::from([
+            (
+                "v1.0.0".to_owned(),
+                FailureCount {
+                    count: 1,
+                    last_at: ago(0),
+                },
+            ),
+            (
+                "v2.0.0".to_owned(),
+                FailureCount {
+                    count: INSTALL_FAILURE_LIMIT,
+                    last_at: ago(0),
+                },
+            ),
+            (
+                "v3.0.0".to_owned(),
+                FailureCount {
+                    count: INSTALL_FAILURE_LIMIT,
+                    last_at: ago(7),
+                },
+            ),
+        ]);
+        // One failure is shown, but the updater will still retry it.
+        assert_eq!(release_failures(&failures, "v1.0.0"), json!(1));
+        assert!(!release_parked(&failures, "v1.0.0"));
+        // At the limit and recent: held back until someone retries.
+        assert!(release_parked(&failures, "v2.0.0"));
+        // Once the window has passed, the count no longer holds anything back,
+        // so the page stops showing it.
+        assert_eq!(release_failures(&failures, "v3.0.0"), Value::Null);
+        assert!(!release_parked(&failures, "v3.0.0"));
+    }
+
+    #[tokio::test]
+    async fn a_successful_install_leaves_no_failure_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        record_install_failure(
+            &state,
+            "v1.5.0",
+            "downloading release package: timed out",
+            false,
+        )
+        .await;
+        record_install_failure(
+            &state,
+            "v1.5.0",
+            "release package checksum does not match",
+            true,
+        )
+        .await;
+        assert_ne!(install_error(&state).await, Value::Null);
+
+        forget_install_failures(&state, "v1.5.0").await;
+        assert_eq!(install_error(&state).await, Value::Null);
+        assert!(!install_failures(&state).await.contains_key("v1.5.0"));
+        assert_eq!(state.updates.read().await["install_error"], Value::Null);
     }
 
     #[tokio::test]

@@ -933,7 +933,7 @@ function App() {
                   ? "Installing it restarts this container once your running automations finish. "
                   : `${updatePrompt.unsupported_reason || "There is no usable update package for this platform"}, so update through your container workflow. `}
               {updatePrompt.install_failures
-                ? `Automatic installs of it have failed ${updatePrompt.install_failures} time(s). `
+                ? `Automatic installs of it have failed ${updatePrompt.install_failures} time(s)${updatePrompt.install_parked ? " and are paused until you retry" : ""}. `
                 : ""}
               Update policy and release channel live in Settings.
             </p>
@@ -2183,8 +2183,10 @@ function SettingsPage({
               <div className="settings-line" role="alert">
                 <span>Failed installs</span>
                 <b>
-                  v{latest.version} failed to install {latest.install_failures} time(s); automatic
-                  updates leave it alone until you retry
+                  v{latest.version} failed to install {latest.install_failures} time(s);{" "}
+                  {latest.install_parked
+                    ? "automatic updates leave it alone until you retry"
+                    : "it will be retried"}
                 </b>
               </div>
             ) : null}
