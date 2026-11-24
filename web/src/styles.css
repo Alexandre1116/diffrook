@@ -511,7 +511,8 @@ button:disabled {
   margin-bottom: 34px;
 }
 .stat-card {
-  height: 103px;
+  /* A hint that wraps to two lines must not be cut off by a fixed box. */
+  min-height: 103px;
   background: #fff;
   border: 1px solid #e7eaf1;
   border-radius: 8px;
@@ -2290,8 +2291,12 @@ button:disabled {
 }
 @media (max-width: 480px) {
   .content {
-    padding-left: 13px;
-    padding-right: 13px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .head-buttons .btn.primary {
+    padding: 0 11px;
+    font-size: 11px;
   }
   .page-head {
     gap: 9px;
@@ -2314,11 +2319,14 @@ button:disabled {
     width: 16px;
   }
   .stat-card {
-    height: 96px;
+    min-height: 96px;
     padding: 12px;
   }
   .stat-card > strong {
     font-size: 23px;
+  }
+  .head-buttons .btn {
+    white-space: nowrap;
   }
   .section-heading h2 {
     font-size: 14px;
@@ -2582,8 +2590,27 @@ button:disabled {
   font-weight: 600;
   color: #344054;
 }
+/* Same control the rest of the page draws: an unstyled select renders at the
+   browser's own size, which sat at a different height next to the buttons and
+   cut its own label off. */
 .update-controls select {
   width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid #e1e6ef;
+  border-radius: 5px;
+  background: #fff;
+  color: #303d50;
+  padding: 0 10px;
+  outline: none;
+  font-size: 11px;
+  transition:
+    border 0.15s,
+    box-shadow 0.15s;
+}
+.update-controls select:focus {
+  border-color: #7395e8;
+  box-shadow: 0 0 0 3px #5f84de18;
 }
 .update-controls small {
   font-size: 10px;
