@@ -1359,23 +1359,24 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
     let mut input_tokens = 0u64;
     let mut output_tokens = 0u64;
     let mut runs_with_usage = 0usize;
-    // Runs that reached a model at all: a queued or still-running run can never
-    // report usage, so counting it as an unmeasured run would make the "measured
-    // in N of M runs" figure able to exceed M.
-    let mut model_runs = 0usize;
+    // Runs that ended: succeeded, failed or cancelled. A queued or still-running
+    // run can never report usage, so it belongs on neither side of "measured in
+    // N of M runs". A failed run is counted whether or not the provider was
+    // reached, which the stored run does not say; that only ever makes the
+    // measured share read lower, never higher.
+    let mut ended_runs = 0usize;
     let mut severities: std::collections::BTreeMap<String, i64> = Default::default();
     let mut used_automations: HashSet<String> = Default::default();
     let mut prs: HashSet<String> = Default::default();
     let mut weekly_prs: HashSet<String> = Default::default();
     for run in runs {
         let status = run["status"].as_str().unwrap_or("");
-        // A run whose provider was actually asked something. A cancelled run may
-        // already have paid for its call, so it belongs with the spending runs;
-        // one still queued or running has nothing to measure, and belongs on
-        // neither side of "measured in N of M runs".
-        let reached_model = status == RUN_SUCCEEDED || status == "failed" || status == "cancelled";
-        if reached_model {
-            model_runs += 1;
+        // A run that is over. A cancelled one may already have paid for its
+        // provider call, so it belongs with the runs that can show spend; one
+        // still queued or running has nothing to measure yet.
+        let ended = status == RUN_SUCCEEDED || status == "failed" || status == "cancelled";
+        if ended {
+            ended_runs += 1;
         }
         if status == RUN_SUCCEEDED {
             completed += 1;
@@ -1411,11 +1412,15 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
         findings += found as i64;
         if let Some(bucket) = day.and_then(|value| days.get_mut(&value)) {
             // Severity breakdown follows the chart window, so the row under the
-            // week's chart never reads as if it were the week's own totals.
-            for finding in run["output"]["findings"].as_array().into_iter().flatten() {
-                *severities
-                    .entry(finding["severity"].as_str().unwrap_or("info").to_owned())
-                    .or_default() += 1;
+            // week's chart never reads as if it were the week's own totals. It
+            // counts the same runs the findings figure counts, so the chips sum
+            // to the number above them.
+            if status == RUN_SUCCEEDED {
+                for finding in run["output"]["findings"].as_array().into_iter().flatten() {
+                    *severities
+                        .entry(finding["severity"].as_str().unwrap_or("info").to_owned())
+                        .or_default() += 1;
+                }
             }
             if status == RUN_SUCCEEDED {
                 bucket.completed += 1;
@@ -1423,14 +1428,14 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
                 bucket.failed += 1;
             }
             bucket.findings += found as i64;
-            if reached_model {
+            if ended {
                 if let Some((input, output)) = run_tokens(run) {
                     bucket.tokens = bucket.tokens.saturating_add(input + output);
                     bucket.measured += 1;
                 }
             }
         }
-        if reached_model {
+        if ended {
             if let Some((input, output)) = run_tokens(run) {
                 runs_with_usage += 1;
                 input_tokens = input_tokens.saturating_add(input);
@@ -1477,7 +1482,7 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
             "output": output_tokens,
             "total": input_tokens + output_tokens,
             "runs_with_usage": runs_with_usage,
-            "model_runs": model_runs,
+            "ended_runs": ended_runs,
         },
         "weekly_severities": severities,
         "weekly": weekly,
@@ -1964,6 +1969,17 @@ mod tests {
             metrics["weekly_severities"]["medium"], 1,
             "the week's breakdown leaves out the finding from outside it"
         );
+        let severity_total: i64 = metrics["weekly_severities"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|value| value.as_i64().unwrap_or(0))
+            .sum();
+        assert_eq!(
+            severity_total,
+            metrics["weekly_totals"]["findings"].as_i64().unwrap(),
+            "the chips under the chart sum to the findings shown beside them"
+        );
         let weekly = metrics["weekly"].as_array().unwrap();
         assert_eq!(weekly.len(), 7, "the chart always shows a full week");
         let today_key = now.date_naive().format("%Y-%m-%d").to_string();
@@ -1984,7 +2000,35 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_never_reached_a_model_is_neither_spend_nor_a_missed_measurement() {
+    fn findings_and_the_severity_row_count_the_same_runs() {
+        let today = chrono::Utc::now().to_rfc3339();
+        let runs = vec![
+            metric_run(
+                RUN_SUCCEEDED,
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{"findings":[{"severity":"high"}]}}),
+            ),
+            // A review that stopped halfway: its partial findings belong to no
+            // completed run, so neither figure may show them.
+            metric_run(
+                "failed",
+                today.clone(),
+                json!({"started_at": today.clone(), "finished_at": today.clone(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"repository"},"output":{"findings":[{"severity":"critical"}]}}),
+            ),
+        ];
+        let metrics = run_metrics(&runs, &[json!({"id":"a1","enabled":true})]);
+        assert_eq!(metrics["findings"], 1);
+        assert_eq!(metrics["weekly_totals"]["findings"], 1);
+        assert_eq!(metrics["weekly_severities"]["high"], 1);
+        assert!(
+            metrics["weekly_severities"].get("critical").is_none(),
+            "the chips cannot show a finding the number beside them does not: {}",
+            metrics["weekly_severities"]
+        );
+    }
+
+    #[test]
+    fn a_run_that_never_ended_is_neither_spend_nor_a_missed_measurement() {
         let today = chrono::Utc::now().to_rfc3339();
         let runs = vec![
             metric_run(
@@ -2007,16 +2051,16 @@ mod tests {
             ),
         ];
         let metrics = run_metrics(&runs, &[json!({"id":"a1","enabled":true})]);
-        assert_eq!(metrics["tokens"]["model_runs"], 2);
+        assert_eq!(metrics["tokens"]["ended_runs"], 2);
         assert_eq!(metrics["tokens"]["runs_with_usage"], 2);
         assert!(
             metrics["tokens"]["runs_with_usage"].as_u64()
-                <= metrics["tokens"]["model_runs"].as_u64(),
+                <= metrics["tokens"]["ended_runs"].as_u64(),
             "the measured count can never exceed the runs it is divided by"
         );
         assert_eq!(
             metrics["tokens"]["total"], 20,
-            "a run that never reached a provider is not spend: {}",
+            "a run that never ended is not spend: {}",
             metrics["tokens"]["total"]
         );
         assert_eq!(metrics["weekly_totals"]["runs_with_usage"], 2);

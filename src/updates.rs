@@ -730,7 +730,8 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
             return Ok(AutomaticOutcome::Deferred);
         }
         clear_install_failure(state, &pending.tag).await;
-        match stage_release(state, &pending.release, Some(&stored)).await {
+        let intent = Intent::Queued { claim: &stored };
+        match stage_release(state, &pending.release, &intent).await {
             Ok(()) => {
                 // stage_release cleared the request under the same lock that
                 // stops a cancellation from being lost.
@@ -786,7 +787,14 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
     let Some(release) = cached_release(state, &tag).await else {
         return Ok(AutomaticOutcome::Idle);
     };
-    if let Err(e) = stage_release(state, &release, None).await {
+    let intent = Intent::Automatic;
+    if let Err(e) = stage_release(state, &release, &intent).await {
+        if withdrawn(&e) {
+            // The administrator asked for another release while this one was
+            // being prepared; their request is the one to carry out next.
+            tracing::info!("the automatic update gives way to a request made by hand: {e:#}");
+            return Ok(AutomaticOutcome::Idle);
+        }
         record_install_failure(state, &tag, &format!("{e:#}"), fatal(&e)).await;
         return Err(e);
     }
@@ -818,47 +826,77 @@ async fn install(state: &AppState, tag: &str) -> Result<()> {
             .as_str()
             .unwrap_or("no usable update package for this platform")
     );
-    stage_release(state, &release, None).await
+    stage_release(state, &release, &Intent::Direct { tag }).await
+}
+
+/// What authorized a staging, and how it is confirmed again under the lock that
+/// cancellations, channel changes and new requests also take. Fetching a package
+/// takes minutes; the decision about whether anyone still wants it does not, so
+/// the two are separated: `stage_release` confirms the intent, fetches, and then
+/// confirms it once more before anything on disk changes.
+enum Intent<'a> {
+    /// The automatic policy asked for the newest release on the channel. It
+    /// steps aside for anything the administrator asked for by hand.
+    Automatic,
+    /// A queued request, whose exact stored row is the claim.
+    Queued { claim: &'a str },
+    /// A button pressed just now, with no automations running.
+    Direct { tag: &'a str },
+}
+
+fn withdrawal(reason: &str) -> anyhow::Error {
+    anyhow::anyhow!("that update is no longer queued: {reason}").context(Withdrawn)
+}
+
+/// Whether the thing that authorized this staging still stands. Call it while
+/// holding `update_lock`, so a cancellation or a channel change either happened
+/// before this - and is seen - or is still waiting behind it.
+async fn still_wanted(state: &AppState, intent: &Intent<'_>) -> Result<()> {
+    let queued = queued_install(state).await;
+    match intent {
+        Intent::Queued { claim } => {
+            let (stored, pending) = match queued {
+                Some(queued) => queued,
+                None => return Err(withdrawal("it was cancelled")),
+            };
+            if stored != *claim {
+                return Err(withdrawal("a different release was asked for since"));
+            }
+            let beta = channel(state).await == "beta";
+            if let Some(reason) = queued_release_stale(&pending.release, beta) {
+                return Err(withdrawal(reason));
+            }
+        }
+        Intent::Automatic => {
+            if let Some((_, pending)) = &queued {
+                return Err(withdrawal(&format!(
+                    "{} was asked for by hand",
+                    pending.tag
+                )));
+            }
+        }
+        Intent::Direct { tag } => {
+            if let Some((_, pending)) = &queued {
+                if pending.tag != *tag {
+                    return Err(withdrawal(&format!(
+                        "{} was asked for by hand",
+                        pending.tag
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Downloads, verifies and stages one release, then asks the service to
 /// restart. Every rule the release list uses to call a package `supported` is
 /// enforced here too, so an offered install is always an installable one.
-/// Downloads, verifies and stages one release, then asks the service to
-/// restart. Every rule the release list uses to call a package `supported` is
-/// enforced here too, so an offered install is always an installable one.
-///
-/// `claim` is the queued request that authorized this staging, when there is
-/// one. Under the same lock a cancellation takes, the request is checked again:
-/// withdrawing an install has to be able to stop it, not merely make the retry
-/// after it fail.
-async fn stage_release(state: &AppState, release: &Value, claim: Option<&str>) -> Result<()> {
-    let _update_guard = state.update_lock.lock().await;
-    if let Some(claim) = claim {
-        if !queued_install(state)
-            .await
-            .is_some_and(|(stored, _)| stored == claim)
-        {
-            // The administrator withdrew this install while the worker was on
-            // its way. Nothing failed; say so in a way the caller can tell
-            // apart from a broken package.
-            return Err(
-                anyhow::anyhow!("the queued update was cancelled before it started")
-                    .context(Withdrawn),
-            );
-        }
+async fn stage_release(state: &AppState, release: &Value, intent: &Intent<'_>) -> Result<()> {
+    {
+        let _gate = state.update_lock.lock().await;
+        still_wanted(state, intent).await?;
     }
-    anyhow::ensure!(
-        can_stage_update(&state.data_dir)?,
-        "an update is already staged for restart"
-    );
-    let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
-        .fetch_one(&state.db)
-        .await?;
-    anyhow::ensure!(
-        active_runs == 0,
-        "wait for running automations to finish before installing an update"
-    );
     let tag = release["tag"].as_str().unwrap_or("");
     let tag_safe: String = tag
         .chars()
@@ -910,6 +948,22 @@ async fn stage_release(state: &AppState, release: &Value, claim: Option<&str>) -
                 .context(Fatal),
         );
     }
+
+    // Nothing has touched `/data` yet. Under the same lock a cancellation or a
+    // channel change takes, decide once more whether anyone still wants this.
+    let _update_guard = state.update_lock.lock().await;
+    still_wanted(state, intent).await?;
+    anyhow::ensure!(
+        can_stage_update(&state.data_dir)?,
+        "an update is already staged for restart"
+    );
+    let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
+        .fetch_one(&state.db)
+        .await?;
+    anyhow::ensure!(
+        active_runs == 0,
+        "wait for running automations to finish before installing an update"
+    );
     let data_dir = state.data_dir.clone();
     // extract_release marks what the package got wrong; a job that never
     // reports back is this process's problem, not the release's, so it is not
@@ -922,10 +976,20 @@ async fn stage_release(state: &AppState, release: &Value, claim: Option<&str>) -
     let tmp = state.data_dir.join("active-update.json.tmp");
     tokio::fs::write(&tmp, serde_json::to_vec(&descriptor)?).await?;
     tokio::fs::rename(tmp, state.data_dir.join("active-update.json")).await?;
-    // The promise is kept, so the request goes away here, under the same lock,
-    // rather than by whoever asked.
-    if let Some(claim) = claim {
-        clear_queued(state, claim).await;
+    // The promise is kept, so the request that authorized it goes away here,
+    // under the same lock, rather than by whoever asked.
+    match intent {
+        Intent::Queued { claim } => {
+            clear_queued(state, claim).await;
+        }
+        Intent::Direct { tag } => {
+            if let Some((stored, pending)) = queued_install(state).await {
+                if pending.tag == *tag {
+                    clear_queued(state, &stored).await;
+                }
+            }
+        }
+        Intent::Automatic => {}
     }
     tracing::warn!(
         "Installing Diffrook {}; the service will restart",
@@ -1838,7 +1902,8 @@ mod tests {
 
         // The administrator withdraws the request while the worker is on its way.
         clear_pending_install(&state).await;
-        let error = stage_release(&state, &pending.release, Some(&claim))
+        let intent = Intent::Queued { claim: &claim };
+        let error = stage_release(&state, &pending.release, &intent)
             .await
             .unwrap_err();
         assert!(withdrawn(&error), "{error:#}");
@@ -1864,10 +1929,89 @@ mod tests {
         )
         .await
         .unwrap();
-        let error = stage_release(&state, &release, Some(&claim))
+        let intent = Intent::Queued { claim: &claim };
+        let error = stage_release(&state, &release, &intent).await.unwrap_err();
+        assert!(withdrawn(&error), "an out-of-date claim installs nothing");
+    }
+
+    #[tokio::test]
+    async fn the_channel_is_checked_again_where_the_queue_is_decided() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let release = json!({
+            "tag": "v9.9.9-rc.1", "version": "9.9.9-rc.1", "prerelease": true, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9-rc.1/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        save_pending(
+            &state,
+            &Pending {
+                tag: "v9.9.9-rc.1".into(),
+                release: release.clone(),
+                attempts: 0,
+                next_try: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+        let (claim, _) = queued_install(&state).await.unwrap();
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel','beta') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let _gate = state.update_lock.lock().await;
+        still_wanted(&state, &Intent::Queued { claim: &claim })
+            .await
+            .expect("a pre-release queued on the beta channel is still wanted");
+
+        // The channel changed while the package was being fetched. The decision
+        // is taken where the queue is decided, so the install stops there.
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel','stable') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        let error = still_wanted(&state, &Intent::Queued { claim: &claim })
             .await
             .unwrap_err();
-        assert!(withdrawn(&error), "an out-of-date claim installs nothing");
+        assert!(withdrawn(&error), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn an_automatic_install_steps_aside_for_a_request_made_by_hand() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let release = json!({
+            "tag": "v9.9.9", "version": "9.9.9", "prerelease": false, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        let _gate = state.update_lock.lock().await;
+        still_wanted(&state, &Intent::Automatic)
+            .await
+            .expect("with nothing queued, the policy may act");
+
+        save_pending(
+            &state,
+            &Pending {
+                tag: "v8.8.8".into(),
+                release,
+                attempts: 0,
+                next_try: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+        let error = still_wanted(&state, &Intent::Automatic).await.unwrap_err();
+        assert!(
+            withdrawn(&error) && format!("{error:#}").contains("v8.8.8"),
+            "the automatic pass defers to the queued request and says which: {error:#}"
+        );
+        // A request for that same release is still allowed to proceed.
+        still_wanted(&state, &Intent::Direct { tag: "v8.8.8" })
+            .await
+            .expect("the release the administrator asked for");
     }
 
     #[tokio::test]
