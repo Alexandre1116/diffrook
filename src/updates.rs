@@ -447,6 +447,25 @@ fn withdrawn(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Withdrawn>().is_some()
 }
 
+/// The release this staging was authorized for is no longer the one this
+/// instance should become: the channel moved, or the running image already
+/// overtook it. Nothing is wrong with the package, and asking again will not
+/// help until the release feed or the channel says otherwise.
+#[derive(Debug)]
+struct Stale;
+
+impl std::fmt::Display for Stale {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("that release is no longer the one to install here")
+    }
+}
+
+impl std::error::Error for Stale {}
+
+fn stale(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Stale>().is_some()
+}
+
 /// Counts a failed install and leaves the reason where Settings can show it.
 /// Only a broken package counts towards leaving a release alone.
 async fn record_install_failure(state: &AppState, tag: &str, message: &str, counted: bool) {
@@ -679,12 +698,12 @@ async fn clear_pending_install(state: &AppState) {
     }
 }
 
-/// Why a queued install should no longer happen, or `None` to go ahead with it.
-/// A queued request was accepted against the releases and the channel of the
-/// moment it was pressed; if the image was upgraded underneath it, or the channel
-/// changed while automations finished, installing it anyway would be a decision
-/// nobody made.
-fn queued_release_stale(release: &Value, beta: bool) -> Option<&'static str> {
+/// Why this release is no longer the one to install here, or `None` when it
+/// still is. A request was accepted against the releases, the running version and
+/// the channel of the moment it was made; if the image was upgraded underneath it,
+/// or the channel changed while automations finished, installing it anyway would
+/// be a decision nobody made.
+fn release_stale(release: &Value, beta: bool) -> Option<&'static str> {
     let running = semver::Version::parse(env!("CARGO_PKG_VERSION")).ok()?;
     let wanted = release["version"]
         .as_str()
@@ -714,7 +733,7 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
         .await?;
     if let Some((stored, pending)) = queued_install(state).await {
         let beta = channel(state).await == "beta";
-        if let Some(reason) = queued_release_stale(&pending.release, beta) {
+        if let Some(reason) = release_stale(&pending.release, beta) {
             tracing::warn!("dropping the queued update to {}: {reason}", pending.tag);
             clear_queued(state, &stored).await;
             return Ok(AutomaticOutcome::Idle);
@@ -745,6 +764,14 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
                         "the queued update to {} was cancelled before it installed",
                         pending.tag
                     );
+                    return Ok(AutomaticOutcome::Idle);
+                }
+                if stale(&e) {
+                    // The channel or the running image overtook the request
+                    // during the fetch. Drop it: the page now offers something
+                    // else, and the next check will decide what to do.
+                    tracing::warn!("the queued update to {} stopped: {e:#}", pending.tag);
+                    clear_queued(state, &stored).await;
                     return Ok(AutomaticOutcome::Idle);
                 }
                 let counted = fatal(&e);
@@ -793,6 +820,10 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
             // The administrator asked for another release while this one was
             // being prepared; their request is the one to carry out next.
             tracing::info!("the automatic update gives way to a request made by hand: {e:#}");
+            return Ok(AutomaticOutcome::Idle);
+        }
+        if stale(&e) {
+            tracing::info!("the automatic update stopped: {e:#}");
             return Ok(AutomaticOutcome::Idle);
         }
         record_install_failure(state, &tag, &format!("{e:#}"), fatal(&e)).await;
@@ -848,10 +879,18 @@ fn withdrawal(reason: &str) -> anyhow::Error {
     anyhow::anyhow!("that update is no longer queued: {reason}").context(Withdrawn)
 }
 
-/// Whether the thing that authorized this staging still stands. Call it while
+/// Whether the thing that authorized this staging still stands, and whether the
+/// release it names is still the one this instance may install. Call it while
 /// holding `update_lock`, so a cancellation or a channel change either happened
 /// before this - and is seen - or is still waiting behind it.
-async fn still_wanted(state: &AppState, intent: &Intent<'_>) -> Result<()> {
+async fn still_wanted(state: &AppState, intent: &Intent<'_>, release: &Value) -> Result<()> {
+    let beta = channel(state).await == "beta";
+    // The channel and the running version can both change while a package is
+    // being fetched. Whatever authorized the staging, the release it names has
+    // to still be one this instance is allowed to become.
+    if let Some(reason) = release_stale(release, beta) {
+        return Err(anyhow::anyhow!("{reason}").context(Stale));
+    }
     let queued = queued_install(state).await;
     match intent {
         Intent::Queued { claim } => {
@@ -862,8 +901,7 @@ async fn still_wanted(state: &AppState, intent: &Intent<'_>) -> Result<()> {
             if stored != *claim {
                 return Err(withdrawal("a different release was asked for since"));
             }
-            let beta = channel(state).await == "beta";
-            if let Some(reason) = queued_release_stale(&pending.release, beta) {
+            if let Some(reason) = release_stale(&pending.release, beta) {
                 return Err(withdrawal(reason));
             }
         }
@@ -878,10 +916,10 @@ async fn still_wanted(state: &AppState, intent: &Intent<'_>) -> Result<()> {
         Intent::Direct { tag } => {
             if let Some((_, pending)) = &queued {
                 if pending.tag != *tag {
-                    return Err(withdrawal(&format!(
-                        "{} was asked for by hand",
+                    return Err(anyhow::anyhow!(
+                        "{} is already queued for install; cancel it in Settings first",
                         pending.tag
-                    )));
+                    ));
                 }
             }
         }
@@ -895,7 +933,7 @@ async fn still_wanted(state: &AppState, intent: &Intent<'_>) -> Result<()> {
 async fn stage_release(state: &AppState, release: &Value, intent: &Intent<'_>) -> Result<()> {
     {
         let _gate = state.update_lock.lock().await;
-        still_wanted(state, intent).await?;
+        still_wanted(state, intent, release).await?;
     }
     let tag = release["tag"].as_str().unwrap_or("");
     let tag_safe: String = tag
@@ -952,7 +990,7 @@ async fn stage_release(state: &AppState, release: &Value, intent: &Intent<'_>) -
     // Nothing has touched `/data` yet. Under the same lock a cancellation or a
     // channel change takes, decide once more whether anyone still wants this.
     let _update_guard = state.update_lock.lock().await;
-    still_wanted(state, intent).await?;
+    still_wanted(state, intent, release).await?;
     anyhow::ensure!(
         can_stage_update(&state.data_dir)?,
         "an update is already staged for restart"
@@ -1216,18 +1254,22 @@ pub async fn set_policy(
             "Automatic updates are available for x86-64 and ARM64 Linux containers",
         );
     }
-    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
+    {
+        // The policy authorizes an automatic install, so it changes where the
+        // installer is decided: it cannot slip between a check and a staging.
+        let _gate = state.update_lock.lock().await;
+        if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
+    }
     automatic_response(&state, install_due_update(&state).await, "mode", mode, None).await
 }
 
 /// Drops a queued install the chosen channel no longer offers, so switching from
-/// beta back to stable cannot leave a pre-release waiting to be installed.
+/// beta back to stable cannot leave a pre-release waiting to be installed. Call
+/// it while holding `update_lock`, together with the channel change that made the
+/// request unwanted, so neither can slip between the installer's checks.
 async fn drop_stale_queue(state: &AppState, beta: bool) -> Option<String> {
-    // Same gate as the installer and the cancel endpoint: the queue is decided
-    // in one place at a time.
-    let _gate = state.update_lock.lock().await;
     let (stored, pending) = queued_install(state).await?;
-    queued_release_stale(&pending.release, beta)?;
+    release_stale(&pending.release, beta)?;
     if clear_queued(state, &stored).await {
         tracing::info!(
             "the queued update to {} was dropped: it is not on the chosen channel",
@@ -1277,10 +1319,15 @@ pub async fn set_channel(
     let Some(channel @ ("stable" | "beta")) = body["channel"].as_str() else {
         return error(StatusCode::BAD_REQUEST, "Choose stable or beta releases");
     };
-    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    // A queued install was accepted against the old channel. If the new one does
-    // not offer that release, saying so now is better than letting it arrive later.
-    let dropped = drop_stale_queue(&state, channel == "beta").await;
+    let dropped = {
+        // The channel decides which releases this instance may become, so it
+        // changes under the same lock the installer holds: a change cannot land
+        // between the installer's last check and its staging. And a queued
+        // install accepted against the old channel goes with it.
+        let _gate = state.update_lock.lock().await;
+        if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
+        drop_stale_queue(&state, channel == "beta").await
+    };
     automatic_response(
         &state,
         install_due_update(&state).await,
@@ -1855,24 +1902,24 @@ mod tests {
         let beta =
             json!({"tag":"v9.9.9-rc.1","version":"9.9.9-rc.1","prerelease":true,"supported":true});
         assert!(
-            queued_release_stale(&beta, true).is_none(),
+            release_stale(&beta, true).is_none(),
             "a pre-release queued on the beta channel stays queued"
         );
         assert_eq!(
-            queued_release_stale(&beta, false),
+            release_stale(&beta, false),
             Some("the release is no longer on this channel"),
             "switching back to stable must not leave a pre-release queued"
         );
         let old = json!({"tag":"v0.2.0","version":"0.2.0","prerelease":false,"supported":true});
         assert_eq!(
-            queued_release_stale(&old, false),
+            release_stale(&old, false),
             Some("this instance already runs that release or a newer one"),
             "an image upgrade overtakes the queue"
         );
         let unusable =
             json!({"tag":"v99.0.0","version":"99.0.0","prerelease":false,"supported":false});
         assert_eq!(
-            queued_release_stale(&unusable, false),
+            release_stale(&unusable, false),
             Some("the release package is not installable here")
         );
     }
@@ -1961,7 +2008,7 @@ mod tests {
             .await
             .unwrap();
         let _gate = state.update_lock.lock().await;
-        still_wanted(&state, &Intent::Queued { claim: &claim })
+        still_wanted(&state, &Intent::Queued { claim: &claim }, &release)
             .await
             .expect("a pre-release queued on the beta channel is still wanted");
 
@@ -1971,10 +2018,59 @@ mod tests {
             .execute(&state.db)
             .await
             .unwrap();
-        let error = still_wanted(&state, &Intent::Queued { claim: &claim })
+        let error = still_wanted(&state, &Intent::Queued { claim: &claim }, &release)
             .await
             .unwrap_err();
-        assert!(withdrawn(&error), "{error:#}");
+        assert!(stale(&error) || withdrawn(&error), "{error:#}");
+    }
+
+    #[tokio::test]
+    async fn a_release_the_channel_has_stopped_offering_is_refused_however_it_was_asked_for() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let beta = json!({
+            "tag": "v9.9.9-rc.1", "version": "9.9.9-rc.1", "prerelease": true, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9-rc.1/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        let _gate = state.update_lock.lock().await;
+
+        // The channel is stable, which is the default: a pre-release is refused
+        // whether the policy chose it or a button did.
+        let error = still_wanted(&state, &Intent::Automatic, &beta)
+            .await
+            .unwrap_err();
+        assert!(stale(&error), "{error:#}");
+        let error = still_wanted(&state, &Intent::Direct { tag: "v9.9.9-rc.1" }, &beta)
+            .await
+            .unwrap_err();
+        assert!(stale(&error), "an off-channel release is refused here too");
+
+        // On the beta channel the same release is fine.
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel','beta') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .execute(&state.db)
+            .await
+            .unwrap();
+        still_wanted(&state, &Intent::Automatic, &beta)
+            .await
+            .expect("the beta channel offers it");
+        still_wanted(&state, &Intent::Direct { tag: "v9.9.9-rc.1" }, &beta)
+            .await
+            .expect("and so it may be installed by hand");
+
+        // And a release the running image has already overtaken is refused
+        // everywhere, because the channel cannot offer something already passed.
+        let overtaken = json!({
+            "tag": "v0.0.2", "version": "0.0.2", "prerelease": false, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v0.0.2/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        let error = still_wanted(&state, &Intent::Direct { tag: "v0.0.2" }, &overtaken)
+            .await
+            .unwrap_err();
+        assert!(stale(&error), "{error:#}");
     }
 
     #[tokio::test]
@@ -1988,7 +2084,7 @@ mod tests {
             "asset_size": 1234,
         });
         let _gate = state.update_lock.lock().await;
-        still_wanted(&state, &Intent::Automatic)
+        still_wanted(&state, &Intent::Automatic, &release)
             .await
             .expect("with nothing queued, the policy may act");
 
@@ -1996,20 +2092,22 @@ mod tests {
             &state,
             &Pending {
                 tag: "v8.8.8".into(),
-                release,
+                release: release.clone(),
                 attempts: 0,
                 next_try: chrono::Utc::now().to_rfc3339(),
             },
         )
         .await
         .unwrap();
-        let error = still_wanted(&state, &Intent::Automatic).await.unwrap_err();
+        let error = still_wanted(&state, &Intent::Automatic, &release)
+            .await
+            .unwrap_err();
         assert!(
             withdrawn(&error) && format!("{error:#}").contains("v8.8.8"),
             "the automatic pass defers to the queued request and says which: {error:#}"
         );
         // A request for that same release is still allowed to proceed.
-        still_wanted(&state, &Intent::Direct { tag: "v8.8.8" })
+        still_wanted(&state, &Intent::Direct { tag: "v8.8.8" }, &release)
             .await
             .expect("the release the administrator asked for");
     }
