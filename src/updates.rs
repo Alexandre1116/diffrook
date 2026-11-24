@@ -356,16 +356,20 @@ struct FailureCount {
 const FAILURE_WINDOW: i64 = 6 * 3600;
 
 impl FailureCount {
+    /// Whether the last counted failure still counts as recent.
+    fn is_fresh(&self) -> bool {
+        chrono::DateTime::parse_from_rfc3339(&self.last_at)
+            .map(|when| {
+                chrono::Utc::now()
+                    .signed_duration_since(when.with_timezone(&chrono::Utc))
+                    .num_seconds()
+                    < FAILURE_WINDOW
+            })
+            .unwrap_or(false)
+    }
+
     fn parked(&self) -> bool {
-        self.count >= INSTALL_FAILURE_LIMIT
-            && chrono::DateTime::parse_from_rfc3339(&self.last_at)
-                .map(|when| {
-                    chrono::Utc::now()
-                        .signed_duration_since(when.with_timezone(&chrono::Utc))
-                        .num_seconds()
-                        < FAILURE_WINDOW
-                })
-                .unwrap_or(false)
+        self.count >= INSTALL_FAILURE_LIMIT && self.is_fresh()
     }
 }
 
@@ -425,17 +429,43 @@ fn fatal(e: &anyhow::Error) -> bool {
     e.downcast_ref::<Fatal>().is_some()
 }
 
+/// The install nobody asked for any more: the queued request that authorized it
+/// was cancelled, or replaced by a request for a different release, while the
+/// package was being fetched. Nothing is wrong with the release.
+#[derive(Debug)]
+struct Withdrawn;
+
+impl std::fmt::Display for Withdrawn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("that update is no longer queued")
+    }
+}
+
+impl std::error::Error for Withdrawn {}
+
+fn withdrawn(e: &anyhow::Error) -> bool {
+    e.downcast_ref::<Withdrawn>().is_some()
+}
+
 /// Counts a failed install and leaves the reason where Settings can show it.
 /// Only a broken package counts towards leaving a release alone.
 async fn record_install_failure(state: &AppState, tag: &str, message: &str, counted: bool) {
     let mut counts = install_failures(state).await;
-    let attempts = {
+    let attempts = if counted {
         let record = counts.entry(tag.to_owned()).or_default();
-        if counted {
-            record.count = record.count.saturating_add(1);
+        if record.count > 0 && !record.is_fresh() {
+            // Strikes that have lapsed do not carry forward: one new failure
+            // after a quiet week starts a fresh set rather than parking the
+            // release on the spot.
+            record.count = 0;
         }
+        record.count = record.count.saturating_add(1);
         record.last_at = chrono::Utc::now().to_rfc3339();
         record.count
+    } else {
+        // A network, quota or timing failure says nothing about the package, so
+        // it neither adds a strike nor keeps an old set of strikes alive.
+        counts.get(tag).map(|record| record.count).unwrap_or(0)
     };
     let stored = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_owned());
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.install_failures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
@@ -700,14 +730,22 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
             return Ok(AutomaticOutcome::Deferred);
         }
         clear_install_failure(state, &pending.tag).await;
-        match stage_release(state, &pending.release).await {
+        match stage_release(state, &pending.release, Some(&stored)).await {
             Ok(()) => {
-                // Only cleared once the package is staged: losing the request
-                // before that would break the promise the button made.
-                clear_queued(state, &stored).await;
+                // stage_release cleared the request under the same lock that
+                // stops a cancellation from being lost.
                 return Ok(AutomaticOutcome::Restarting);
             }
             Err(e) => {
+                if withdrawn(&e) {
+                    // The administrator cancelled while the package was being
+                    // fetched. Nothing failed and nothing is waiting to retry.
+                    tracing::info!(
+                        "the queued update to {} was cancelled before it installed",
+                        pending.tag
+                    );
+                    return Ok(AutomaticOutcome::Idle);
+                }
                 let counted = fatal(&e);
                 record_install_failure(state, &pending.tag, &format!("{e:#}"), counted).await;
                 if counted {
@@ -748,7 +786,7 @@ async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
     let Some(release) = cached_release(state, &tag).await else {
         return Ok(AutomaticOutcome::Idle);
     };
-    if let Err(e) = stage_release(state, &release).await {
+    if let Err(e) = stage_release(state, &release, None).await {
         record_install_failure(state, &tag, &format!("{e:#}"), fatal(&e)).await;
         return Err(e);
     }
@@ -780,14 +818,36 @@ async fn install(state: &AppState, tag: &str) -> Result<()> {
             .as_str()
             .unwrap_or("no usable update package for this platform")
     );
-    stage_release(state, &release).await
+    stage_release(state, &release, None).await
 }
 
 /// Downloads, verifies and stages one release, then asks the service to
 /// restart. Every rule the release list uses to call a package `supported` is
 /// enforced here too, so an offered install is always an installable one.
-async fn stage_release(state: &AppState, release: &Value) -> Result<()> {
+/// Downloads, verifies and stages one release, then asks the service to
+/// restart. Every rule the release list uses to call a package `supported` is
+/// enforced here too, so an offered install is always an installable one.
+///
+/// `claim` is the queued request that authorized this staging, when there is
+/// one. Under the same lock a cancellation takes, the request is checked again:
+/// withdrawing an install has to be able to stop it, not merely make the retry
+/// after it fail.
+async fn stage_release(state: &AppState, release: &Value, claim: Option<&str>) -> Result<()> {
     let _update_guard = state.update_lock.lock().await;
+    if let Some(claim) = claim {
+        if !queued_install(state)
+            .await
+            .is_some_and(|(stored, _)| stored == claim)
+        {
+            // The administrator withdrew this install while the worker was on
+            // its way. Nothing failed; say so in a way the caller can tell
+            // apart from a broken package.
+            return Err(
+                anyhow::anyhow!("the queued update was cancelled before it started")
+                    .context(Withdrawn),
+            );
+        }
+    }
     anyhow::ensure!(
         can_stage_update(&state.data_dir)?,
         "an update is already staged for restart"
@@ -862,6 +922,11 @@ async fn stage_release(state: &AppState, release: &Value) -> Result<()> {
     let tmp = state.data_dir.join("active-update.json.tmp");
     tokio::fs::write(&tmp, serde_json::to_vec(&descriptor)?).await?;
     tokio::fs::rename(tmp, state.data_dir.join("active-update.json")).await?;
+    // The promise is kept, so the request goes away here, under the same lock,
+    // rather than by whoever asked.
+    if let Some(claim) = claim {
+        clear_queued(state, claim).await;
+    }
     tracing::warn!(
         "Installing Diffrook {}; the service will restart",
         release["version"]
@@ -1094,6 +1159,9 @@ pub async fn set_policy(
 /// Drops a queued install the chosen channel no longer offers, so switching from
 /// beta back to stable cannot leave a pre-release waiting to be installed.
 async fn drop_stale_queue(state: &AppState, beta: bool) -> Option<String> {
+    // Same gate as the installer and the cancel endpoint: the queue is decided
+    // in one place at a time.
+    let _gate = state.update_lock.lock().await;
     let (stored, pending) = queued_install(state).await?;
     queued_release_stale(&pending.release, beta)?;
     if clear_queued(state, &stored).await {
@@ -1308,6 +1376,9 @@ pub async fn apply(
             attempts: 0,
             next_try: chrono::Utc::now().to_rfc3339(),
         };
+        // Same gate as the installer and the cancel endpoint, so queuing cannot
+        // land between an installer checking the queue and staging it.
+        let _gate = state.update_lock.lock().await;
         if let Err(e) = save_pending(&state, &pending).await {
             return error(StatusCode::INTERNAL_SERVER_ERROR, e);
         }
@@ -1335,6 +1406,9 @@ pub async fn cancel_pending(State(state): State<AppState>, headers: HeaderMap) -
     if let Err(r) = crate::routes::guard(&state, &headers, true).await {
         return r;
     }
+    // Taken in the same order as the installer: cancelling cannot slip between
+    // the installer checking the queue and it staging the package.
+    let _gate = state.update_lock.lock().await;
     if pending_install(&state).await.is_none() {
         return error(StatusCode::NOT_FOUND, "No update is queued");
     }
@@ -1736,6 +1810,119 @@ mod tests {
         assert_eq!(
             queued_release_stale(&unusable, false),
             Some("the release package is not installable here")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_install_withdrawn_before_it_starts_is_not_a_failed_package() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let release = json!({
+            "tag": "v9.9.9", "version": "9.9.9", "prerelease": false, "supported": true,
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1234,
+        });
+        save_pending(
+            &state,
+            &Pending {
+                tag: "v9.9.9".into(),
+                release: release.clone(),
+                attempts: 0,
+                next_try: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+        let (claim, pending) = queued_install(&state).await.unwrap();
+
+        // The administrator withdraws the request while the worker is on its way.
+        clear_pending_install(&state).await;
+        let error = stage_release(&state, &pending.release, Some(&claim))
+            .await
+            .unwrap_err();
+        assert!(withdrawn(&error), "{error:#}");
+        assert!(
+            install_failures(&state).await.is_empty(),
+            "a withdrawn install is not a strike against the release"
+        );
+        assert!(install_error(&state).await.is_null());
+        assert!(
+            !*state.restart.subscribe().borrow(),
+            "nothing was staged, so nothing restarts"
+        );
+
+        // The same for a request replaced by one for another release.
+        save_pending(
+            &state,
+            &Pending {
+                tag: "v8.8.8".into(),
+                release: release.clone(),
+                attempts: 0,
+                next_try: chrono::Utc::now().to_rfc3339(),
+            },
+        )
+        .await
+        .unwrap();
+        let error = stage_release(&state, &release, Some(&claim))
+            .await
+            .unwrap_err();
+        assert!(withdrawn(&error), "an out-of-date claim installs nothing");
+    }
+
+    #[tokio::test]
+    async fn lapsed_strikes_do_not_park_a_release_on_the_next_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let lapsed = (chrono::Utc::now() - chrono::Duration::hours(8)).to_rfc3339();
+        let mut stored = std::collections::HashMap::new();
+        stored.insert(
+            "v9.9.9".to_string(),
+            FailureCount {
+                count: INSTALL_FAILURE_LIMIT,
+                last_at: lapsed.clone(),
+            },
+        );
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.install_failures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(serde_json::to_string(&stored).unwrap())
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        record_install_failure(&state, "v9.9.9", "the package is unusable", true).await;
+        let counts = install_failures(&state).await;
+        assert_eq!(
+            counts["v9.9.9"].count, 1,
+            "a fresh failure starts a fresh set, it does not resume an old one"
+        );
+        assert!(!counts["v9.9.9"].parked());
+    }
+
+    #[tokio::test]
+    async fn a_transient_failure_does_not_keep_old_strikes_alive() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = crate::core::AppState::new(dir.path()).await.unwrap();
+        let lapsed = (chrono::Utc::now() - chrono::Duration::hours(8)).to_rfc3339();
+        let mut stored = std::collections::HashMap::new();
+        stored.insert(
+            "v9.9.9".to_string(),
+            FailureCount {
+                count: INSTALL_FAILURE_LIMIT,
+                last_at: lapsed.clone(),
+            },
+        );
+        sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.install_failures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+            .bind(serde_json::to_string(&stored).unwrap())
+            .execute(&state.db)
+            .await
+            .unwrap();
+
+        record_install_failure(&state, "v9.9.9", "GitHub timed out", false).await;
+        let counts = install_failures(&state).await;
+        assert_eq!(counts["v9.9.9"].last_at, lapsed, "the clock is not moved");
+        assert!(
+            !counts["v9.9.9"].parked(),
+            "a night of network trouble must not revive a parked release"
         );
     }
 
