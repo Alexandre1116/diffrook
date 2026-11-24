@@ -176,22 +176,17 @@ pub async fn execute(ctx: EngineContext) -> Result<RunOutput> {
             bail!("analysis pass exceeds the action-specific model request limit")
         }
         input_chars = input_chars.saturating_add(prompt.len());
-        let (raw, tokens) = providers::complete(
-            &ctx.provider,
+        let raw = providers::complete(providers::Call {
+            provider: &ctx.provider,
             model,
-            &system,
-            &prompt,
-            limits.max_output_tokens,
+            system: &system,
+            prompt: &prompt,
+            max_output_tokens: limits.max_output_tokens,
             timeout,
-            &ctx.client,
-        )
+            client: &ctx.client,
+            spent: &ctx.usage,
+        })
         .await?;
-        // Record spend before parsing: a run that dies on malformed JSON still
-        // paid for the call.
-        ctx.usage
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .add(tokens);
         parsed_results.push(providers::parse_json_object::<ModelResult>(&raw)?);
     }
     let mut summaries = Vec::new();
@@ -697,7 +692,10 @@ fn clip(text: &str, limit: usize) -> String {
     let keep = limit - 1;
     let cut: String = text.chars().take(keep).collect();
     // Prefer a clean sentence end; a mid-word cut with an ellipsis is the fallback.
-    if let Some(at) = cut.rfind(['.', '!', '?', '\n']) {
+    if let Some(at) = cut.rfind(['.', '!', '?', '\n']).filter(|at| {
+        // A dot inside `foo.rs` or `v1.2` is not the end of a sentence.
+        *at + 1 >= cut.len() || cut[*at + 1..].starts_with(char::is_whitespace)
+    }) {
         if at + 1 >= keep.div_ceil(2) {
             return cut[..=at].to_string();
         }
@@ -818,6 +816,24 @@ mod tests {
         assert_eq!(clip("short note", 30), "short note");
         assert_eq!(clip("abcdefghij", 5), "abcd…");
         assert_eq!(clip("😀😀😀😀", 3).chars().count(), 3);
+        assert_eq!(
+            clip("anything", 0),
+            "",
+            "a zero limit clips to nothing, not one char"
+        );
+        // A dot inside a file name must not be mistaken for the end of a
+        // sentence, or the finding would stop at "src/pay.py".
+        assert_eq!(
+            clip(
+                "A retry in src/pay.py can charge the customer twice today",
+                32
+            ),
+            "A retry in src/pay.py can charg…"
+        );
+        assert_eq!(
+            clip("First sentence is long enough. Second one is not", 32),
+            "First sentence is long enough."
+        );
     }
     #[test]
     fn sensitive_files_and_secret_markers_are_excluded() {

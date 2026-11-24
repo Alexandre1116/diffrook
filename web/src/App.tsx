@@ -311,7 +311,11 @@ function App() {
       window.setTimeout(() => window.location.reload(), 2500);
       return;
     }
-    if (result?.deferred)
+    if (result?.queued)
+      setNotice(
+        "Automations are still running, so the update is queued. Diffrook restarts as soon as they finish.",
+      );
+    else if (result?.deferred)
       setNotice("An automation is still running; the update installs as soon as it finishes.");
     return reload();
   };
@@ -356,11 +360,15 @@ function App() {
   // One popup per release, and never stacked over a form the admin is filling in.
   const promptShownFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!release || modal || detail) return;
+    if (!release || modal || detail || showStarPrompt) return;
     if (promptShownFor.current === release.tag || askedTags.includes(release.tag)) return;
     promptShownFor.current = release.tag;
+    // Remember the offer when it is shown, not only when it is closed: a reload
+    // with the popup still open must not bring a second one.
+    rememberTag(updatePromptKey, release.tag);
+    setAskedTags((current) => mergeTag(current, release.tag));
     setUpdatePrompt(release);
-  }, [release, askedTags, modal, detail]);
+  }, [release, askedTags, modal, detail, showStarPrompt]);
   // The offer can change while the popup is open, for example when the release
   // channel is switched, so an out-of-date popup never offers another release.
   useEffect(() => {
@@ -910,9 +918,14 @@ function App() {
               {updatePrompt.prerelease
                 ? "This is a pre-release on your beta channel."
                 : "It is the newest release on your channel."}{" "}
-              {updatePrompt.supported
-                ? "Installing it restarts this container once your running automations finish."
-                : "There is no update package for this platform, so update through your container workflow."}{" "}
+              {updatePrompt.rolled_back
+                ? "This release failed to start here and was rolled back; install it again only if you know why. "
+                : updatePrompt.supported
+                  ? "Installing it restarts this container once your running automations finish. "
+                  : "There is no update package for this platform, so update through your container workflow. "}
+              {updatePrompt.install_failures
+                ? `Automatic installs of it have failed ${updatePrompt.install_failures} time(s). `
+                : ""}
               Update policy and release channel live in Settings.
             </p>
             <div className="form-actions">
@@ -1099,7 +1112,7 @@ function Overview({
   const weekly: Obj[] = d.weekly || [];
   const totals = d.weekly_totals || {};
   const tokens = d.tokens || {};
-  const severities = d.severities || {};
+  const severities = d.weekly_severities || {};
   // First-run guidance is history, not current state: it stays away once this
   // instance has had a connection, even if that connection was removed later.
   const firstRun = !data.connections.length && !d.connection_configured;
@@ -1206,7 +1219,14 @@ function Overview({
           <span className="banner-line" />
         </div>
       )}
-      <div className="stat-grid">
+      {!loaded ? (
+        <div className="stat-grid" aria-busy="true">
+          {[0, 1, 2, 3].map((index) => (
+            <div key={index} className="stat-card stat-loading" />
+          ))}
+        </div>
+      ) : (
+        <div className="stat-grid">
         <Stat
           label="Automations"
           value={d.automations}
@@ -1230,12 +1250,14 @@ function Overview({
           value={tokens.runs_with_usage ? tokens.total : "—"}
           hint={
             tokens.runs_with_usage
-              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out`
-              : "Token counts start with this version"
+              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${d.runs ?? 0} runs`
+              : "No provider has reported token counts here yet"
           }
           icon={Sparkles}
         />
       </div>
+      )}
+      {loaded && (
       <section className="panel-card chart-panel">
         <div className="panel-title">
           <div>
@@ -1269,17 +1291,19 @@ function Overview({
           </span>
         </div>
         {Object.keys(severities).length > 0 && (
-          <div className="severity-row" aria-label="Findings by severity">
-            {["critical", "high", "medium", "low", "info"]
-              .filter((level) => severities[level])
-              .map((level) => (
-                <span key={level} className={`severity severity-${level}`}>
-                  {level} {count(severities[level])}
-                </span>
-              ))}
-          </div>
+        <div className="severity-row" aria-label="Findings by severity in the last 7 days">
+          <span className="severity-caption">By severity, last 7 days</span>
+          {["critical", "high", "medium", "low", "info"]
+            .filter((level) => severities[level])
+            .map((level) => (
+              <span key={level} className={`severity severity-${level}`}>
+                {level} {count(severities[level])}
+              </span>
+            ))}
+        </div>
         )}
       </section>
+      )}
       <div className="section-heading">
         <div>
           <h2>Recent runs</h2>
@@ -2005,14 +2029,27 @@ function SettingsPage({
     setCheckError("");
     try {
       const result = await api<Obj>("/updates/check", "POST", {});
+      if (result?.restarting) {
+        notice("Update installed. Reconnecting to Diffrook…");
+        window.setTimeout(() => window.location.reload(), 2500);
+        return;
+      }
       notice(
-        result?.latest
-          ? `GitHub offers v${result.latest.version}; this instance runs v${result.current_version}`
-          : `v${result?.current_version} is the newest release on GitHub`,
+        result?.install_error
+          ? `GitHub was reached, but the automatic update failed: ${result.install_error}`
+          : result?.deferred
+            ? "GitHub was reached. An automation is running, so the update waits for it."
+            : result?.latest
+              ? `GitHub offers v${result.latest.version}; this instance runs v${result.current_version}`
+              : `v${result?.current_version} is the newest release on GitHub`,
       );
       await reload();
     } catch (e) {
-      setCheckError((e as Error).message);
+      const message = (e as Error).message;
+      // A throttled click costs nothing and is nobody's mistake, so it is a
+      // status message rather than a failure.
+      if (/Try again in/i.test(message)) notice(message);
+      else setCheckError(message);
     } finally {
       setChecking(false);
     }
@@ -2117,6 +2154,32 @@ function SettingsPage({
               <div className="settings-line">
                 <span>Last attempt</span>
                 <b>v{latest.version} failed to start and was rolled back</b>
+              </div>
+            )}
+            {latest?.install_failures ? (
+              <div className="settings-line" role="alert">
+                <span>Failed installs</span>
+                <b>
+                  v{latest.version} failed to install {latest.install_failures} time(s); automatic
+                  updates leave it alone until you retry
+                </b>
+              </div>
+            ) : null}
+            {data.updates.install_error && (
+              <div className="settings-line" role="alert">
+                <span>Last automatic update failed</span>
+                <b>
+                  v{data.updates.install_error.tag}: {data.updates.install_error.message}
+                </b>
+              </div>
+            )}
+            {data.updates.pending_install && (
+              <div className="settings-line">
+                <span>Queued update</span>
+                <b>
+                  v{data.updates.pending_install} installs as soon as the running automations
+                  finish
+                </b>
               </div>
             )}
             <div className="settings-line">

@@ -253,8 +253,9 @@ async fn manual_release_check_is_authenticated_and_throttled() {
     let cookie = admin(&app, &state).await;
     // A check that just happened must not spend another request from GitHub's
     // limited unauthenticated quota, the limit that used to strand instances.
+    // The stamp counts attempts, so a check that failed is throttled too.
     let now = chrono::Utc::now().to_rfc3339();
-    sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.checked_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
         .bind(&now)
         .execute(&state.db)
         .await
@@ -268,10 +269,16 @@ async fn manual_release_check_is_authenticated_and_throttled() {
     )
     .await;
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
-    assert!(body["error"]
-        .as_str()
-        .unwrap_or_default()
-        .contains("Already checked"));
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(message.contains("moments ago"), "{message}");
+    assert!(message.contains("Try again in"), "{message}");
+    // No successful check has ever happened, so the page must not claim the
+    // instance is up to date while it is being throttled.
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["checked_at"].is_null(),
+        "a throttled attempt must not look like a completed check"
+    );
 }
 
 #[tokio::test]

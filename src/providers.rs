@@ -114,15 +114,33 @@ impl TokenUsage {
     }
 }
 
-pub async fn complete(
-    provider: &Value,
-    model: &str,
-    system: &str,
-    prompt: &str,
-    max_output_tokens: u32,
-    timeout: Duration,
-    client: &reqwest::Client,
-) -> Result<(String, TokenUsage)> {
+/// One model call. Grouped because the request, the HTTP client and the cell
+/// that records what the call cost belong together.
+pub struct Call<'a> {
+    pub provider: &'a Value,
+    pub model: &'a str,
+    pub system: &'a str,
+    pub prompt: &'a str,
+    pub max_output_tokens: u32,
+    pub timeout: Duration,
+    pub client: &'a reqwest::Client,
+    pub spent: &'a std::sync::Mutex<TokenUsage>,
+}
+
+/// Runs one model call and records what it cost as soon as the provider
+/// answers, before any check on the response body. A gateway that bills for a
+/// call and returns an empty or error body still gets its tokens counted.
+pub async fn complete(request: Call<'_>) -> Result<String> {
+    let Call {
+        provider,
+        model,
+        system,
+        prompt,
+        max_output_tokens,
+        timeout,
+        client,
+        spent,
+    } = request;
     if system.len().saturating_add(prompt.len()) > 180_000 {
         bail!("model request exceeds the 180000 character safety limit");
     }
@@ -182,6 +200,15 @@ pub async fn complete(
     let status = response.status();
     let bytes = crate::network::read_body(response, 8 * 1024 * 1024).await?;
     let body: Value = serde_json::from_slice(&bytes).context("decoding model response")?;
+    // Count the call before checking the body: providers bill what they
+    // generate, and a gateway that answers badly may already have spent it.
+    let tokens = usage_for(kind, &body);
+    if tokens.reported {
+        spent
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .add(tokens);
+    }
     if !status.is_success() {
         bail!(
             "provider returned HTTP {status}: {}",
@@ -207,7 +234,7 @@ pub async fn complete(
         _ => None,
     }
     .ok_or_else(|| anyhow!("provider response did not contain text"))?;
-    Ok((content.to_owned(), usage_for(kind, &body)))
+    Ok(content.to_owned())
 }
 
 /// Reads the token counters each provider returns. Ollama reports evaluation
@@ -312,5 +339,53 @@ mod tests {
             TokenUsage::default().json(),
             json!({"input_tokens": null, "output_tokens": null})
         );
+    }
+
+    /// A gateway that bills the call and answers with no text: the spend is real
+    /// and must reach the run, even though the call itself failed.
+    #[tokio::test]
+    async fn a_provider_response_without_text_still_records_its_spend() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Read the request before answering, then keep the socket open long
+            // enough for the client to take the response.
+            let mut request = [0u8; 4096];
+            let _ = socket.read(&mut request).await;
+            let body = r#"{"usage":{"prompt_tokens":120,"completion_tokens":30}}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+        let spent = std::sync::Mutex::new(TokenUsage::default());
+        let provider = json!({"kind":"openai","base_url":format!("http://{addr}"),"api_key":"key"});
+        let outcome = crate::network::with_private_mock(async {
+            complete(Call {
+                provider: &provider,
+                model: "gpt-5.2",
+                system: "s",
+                prompt: "p",
+                max_output_tokens: 16,
+                timeout: Duration::from_secs(5),
+                client: &reqwest::Client::new(),
+                spent: &spent,
+            })
+            .await
+        })
+        .await;
+        assert!(
+            outcome.is_err(),
+            "a response with no text is still a failure"
+        );
+        let usage = *spent.lock().unwrap();
+        assert!(usage.reported, "the provider reported what it spent");
+        assert_eq!((usage.input, usage.output), (Some(120), Some(30)));
+        assert_eq!(usage.total(), 150);
     }
 }

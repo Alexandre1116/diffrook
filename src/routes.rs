@@ -879,7 +879,7 @@ pub(crate) async fn run_queue(
         uuid::Uuid::new_v4().to_string()
     };
     let now = chrono::Utc::now().to_rfc3339();
-    let run = json!({"id":id,"automation_id":automation_id,"automation_name":automation["name"],"automation_version":automation["updated_at"],"status":"queued","trigger":trigger,"created_at":now,"started_at":null,"finished_at":null,"error":null,"output":null});
+    let run = json!({"id":id,"automation_id":automation_id,"automation_name":automation["name"],"automation_version":automation["updated_at"],"connection_id":automation["connection_id"],"status":"queued","trigger":trigger,"created_at":now,"started_at":null,"finished_at":null,"error":null,"output":null});
     let inserted = sqlx::query(
         "INSERT OR IGNORE INTO runs(id,automation_id,body,created_at,status) SELECT ?,?,?,?,? WHERE (SELECT COUNT(*) FROM runs WHERE status='queued') < 1000",
     )
@@ -975,26 +975,14 @@ async fn process_queued(s: &AppState) -> anyhow::Result<bool> {
     let usage: std::sync::Arc<std::sync::Mutex<crate::providers::TokenUsage>> =
         std::sync::Arc::new(std::sync::Mutex::new(Default::default()));
     let result = execute_run(s, &run, &mut cancel_rx, &usage).await;
+    let reported = *usage
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     match result {
-        Ok(output) => {
-            run["status"] = json!(RUN_SUCCEEDED);
-            run["output"] = serde_json::to_value(output)?
-        }
+        Ok(output) => finish_run(&mut run, Some(output), None, reported)?,
         Err(e) => {
             let message = redact_error(s, &run, &e.to_string()).await;
-            run["status"] = json!(if message == "Run cancelled" {
-                "cancelled"
-            } else {
-                "failed"
-            });
-            run["error"] = json!(message);
-            // A run that died after a provider answered still spent tokens.
-            let reported = *usage
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            if reported.reported {
-                run["usage"] = reported.json();
-            }
+            finish_run(&mut run, None, Some(message), reported)?;
         }
     }
     run["finished_at"] = json!(chrono::Utc::now().to_rfc3339());
@@ -1247,6 +1235,36 @@ async fn dashboard(State(s): State<AppState>, h: HeaderMap) -> Response {
 /// The status the queue writes when a run finishes cleanly. Metrics and the
 /// queue share this constant so the overview can never drift from it again.
 const RUN_SUCCEEDED: &str = "succeeded";
+
+/// Records how a run ended. The queue writes this shape and `run_metrics` reads
+/// it, so the status strings and the token fields cannot drift apart again.
+fn finish_run(
+    run: &mut Value,
+    output: Option<crate::types::RunOutput>,
+    failure: Option<String>,
+    usage: crate::providers::TokenUsage,
+) -> anyhow::Result<()> {
+    match output {
+        Some(output) => {
+            run["status"] = json!(RUN_SUCCEEDED);
+            run["output"] = serde_json::to_value(output)?;
+        }
+        None => {
+            let message = failure.unwrap_or_else(|| "unknown failure".to_owned());
+            run["status"] = json!(if message == "Run cancelled" {
+                "cancelled"
+            } else {
+                "failed"
+            });
+            run["error"] = json!(message);
+            if usage.reported {
+                // A run that died after a provider answered still spent tokens.
+                run["usage"] = usage.json();
+            }
+        }
+    }
+    Ok(())
+}
 const CHART_DAYS: i64 = 7;
 
 /// One day of the activity chart.
@@ -1286,16 +1304,22 @@ fn run_tokens(run: &Value) -> Option<(u64, u64)> {
     Some((input.unwrap_or(0), output.unwrap_or(0)))
 }
 
-/// Pull request identity for a run: the same `owner/repo#7` on two code hosts is
-/// not the same review.
+/// Pull request identity for a run. The code host comes from the connection the
+/// run was queued for, so the same `owner/repo#7` on two hosts is two reviews
+/// while a webhook run and a scheduled run of the same pull request are one.
 fn pull_request_key(run: &Value) -> Option<String> {
     if run["trigger"]["kind"].as_str() != Some("pull_request") {
         return None;
     }
     let number = run["trigger"]["number"].as_u64()?;
-    let host = run["trigger"]["delivery_identity"]
+    // Older runs only carried the connection inside the webhook delivery id.
+    let host = run["connection_id"]
         .as_str()
-        .and_then(|identity| identity.split('|').next())
+        .or_else(|| {
+            run["trigger"]["delivery_identity"]
+                .as_str()
+                .and_then(|identity| identity.split('|').next())
+        })
         .unwrap_or("");
     Some(format!(
         "{}:{}#{}",
@@ -1359,12 +1383,14 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
             .as_array()
             .map_or(0, |list| list.len());
         findings += found as i64;
-        for finding in run["output"]["findings"].as_array().into_iter().flatten() {
-            *severities
-                .entry(finding["severity"].as_str().unwrap_or("info").to_owned())
-                .or_default() += 1;
-        }
         if let Some(bucket) = day.and_then(|value| days.get_mut(&value)) {
+            // Severity breakdown follows the chart window, so the row under the
+            // week's chart never reads as if it were the week's own totals.
+            for finding in run["output"]["findings"].as_array().into_iter().flatten() {
+                *severities
+                    .entry(finding["severity"].as_str().unwrap_or("info").to_owned())
+                    .or_default() += 1;
+            }
             if status == RUN_SUCCEEDED {
                 bucket.completed += 1;
             } else if status == "failed" {
@@ -1416,7 +1442,7 @@ fn run_metrics(runs: &[Value], automations: &[Value]) -> Value {
             "total": input_tokens + output_tokens,
             "runs_with_usage": runs_with_usage,
         },
-        "severities": severities,
+        "weekly_severities": severities,
         "weekly": weekly,
         "weekly_totals": weekly_totals,
     })
@@ -1804,7 +1830,7 @@ mod tests {
     }
 
     fn metric_run(status: &str, created: String, body: Value) -> Value {
-        json!({"status": status, "created_at": created, "finished_at": body["finished_at"], "started_at": body["started_at"], "usage": body["usage"], "output": body["output"], "trigger": body["trigger"], "automation_id": body["automation_id"]})
+        json!({"status": status, "created_at": created, "finished_at": body["finished_at"], "started_at": body["started_at"], "connection_id": body["connection_id"], "usage": body["usage"], "output": body["output"], "trigger": body["trigger"], "automation_id": body["automation_id"]})
     }
 
     #[test]
@@ -1813,46 +1839,55 @@ mod tests {
         let today = now.to_rfc3339();
         let long_ago = (now - chrono::Duration::days(40)).to_rfc3339();
         let runs = vec![
-            // The same pull request reviewed twice counts once.
+            // A webhook review of a pull request.
             metric_run(
                 RUN_SUCCEEDED,
                 today.clone(),
-                json!({"started_at": today, "finished_at": today, "automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7,"delivery_identity":"conn1|d1"},"output":{"findings":[{"severity":"high"},{"severity":"low"}],"usage":{"input_tokens":120,"output_tokens":30}}}),
+                json!({"started_at": today, "finished_at": today, "connection_id":"c1","automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7,"delivery_identity":"c1|d1"},"output":{"findings":[{"severity":"high"},{"severity":"low"}],"usage":{"input_tokens":120,"output_tokens":30}}}),
             ),
+            // The same pull request, this time reached by schedule: still one review.
             metric_run(
                 RUN_SUCCEEDED,
                 today.clone(),
-                json!({"started_at": today, "finished_at": today, "automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7,"delivery_identity":"conn1|d2"},"output":{"findings":[],"usage":{"input_tokens":80,"output_tokens":20}}}),
+                json!({"started_at": today, "finished_at": today, "connection_id":"c1","automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7},"output":{"findings":[],"usage":{"input_tokens":80,"output_tokens":20}}}),
             ),
             // A failed run whose provider already answered: its tokens count.
             metric_run(
                 "failed",
                 today.clone(),
-                json!({"started_at": today, "finished_at": today, "automation_id":"a2","trigger":{"kind":"repository"},"usage":{"input_tokens":500,"output_tokens":0},"output":{"findings":[],"usage":{"input_tokens":null,"output_tokens":null}}}),
+                json!({"started_at": today, "finished_at": today, "connection_id":"c1","automation_id":"a2","trigger":{"kind":"repository"},"usage":{"input_tokens":500,"output_tokens":0},"output":{"findings":[],"usage":{"input_tokens":null,"output_tokens":null}}}),
             ),
             // The same owner/repo#number on another code host is another review.
             metric_run(
                 RUN_SUCCEEDED,
                 today.clone(),
-                json!({"started_at": today, "finished_at": today, "automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7,"delivery_identity":"conn2|d3"},"output":{"findings":[{"severity":"medium"}],"usage":{"input_tokens":60,"output_tokens":10}}}),
+                json!({"started_at": today, "finished_at": today, "connection_id":"c2","automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":7},"output":{"findings":[{"severity":"medium"}],"usage":{"input_tokens":60,"output_tokens":10}}}),
             ),
-            // Older than the chart window, and with no usage metadata at all.
+            // Older than the chart window, but a real pull request that really
+            // spent tokens: it must count overall and not in the week.
             metric_run(
                 RUN_SUCCEEDED,
                 long_ago.clone(),
-                json!({"started_at": long_ago.clone(), "finished_at": long_ago.clone(), "automation_id":"a3","trigger":{"kind":"issue","repository":"acme/api","number":3},"output":{"findings":[{"severity":"medium"}],"usage":{"input_tokens":null,"output_tokens":null}}}),
+                json!({"started_at": long_ago.clone(), "finished_at": long_ago.clone(), "connection_id":"c1","automation_id":"a3","trigger":{"kind":"pull_request","repository":"acme/api","number":9},"output":{"findings":[{"severity":"medium"}],"usage":{"input_tokens":40,"output_tokens":8}}}),
             ),
             // Never started, so its automation is not counted as used.
             metric_run(
                 "queued",
                 today.clone(),
-                json!({"started_at": null, "finished_at": null, "automation_id":"a4","trigger":{"kind":"pull_request","repository":"acme/api","number":9},"output":{}}),
+                json!({"started_at": null, "finished_at": null, "connection_id":"c1","automation_id":"a4","trigger":{"kind":"pull_request","repository":"acme/api","number":11},"output":{}}),
             ),
             // A run of an automation that no longer exists.
             metric_run(
                 RUN_SUCCEEDED,
                 today.clone(),
-                json!({"started_at": today, "finished_at": today, "automation_id":"deleted","trigger":{"kind":"pull_request","repository":"acme/api","number":10},"output":{"findings":[],"usage":{"input_tokens":5,"output_tokens":5}}}),
+                json!({"started_at": today, "finished_at": today, "connection_id":"c1","automation_id":"deleted","trigger":{"kind":"pull_request","repository":"acme/api","number":10},"output":{"findings":[],"usage":{"input_tokens":5,"output_tokens":5}}}),
+            ),
+            // A run queued before runs carried a connection id: the host still
+            // comes from its webhook delivery identity.
+            metric_run(
+                RUN_SUCCEEDED,
+                today.clone(),
+                json!({"started_at": today, "finished_at": today,"automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/web","number":3,"delivery_identity":"c3|d9"},"output":{"findings":[{"severity":"info"}],"usage":{"input_tokens":10,"output_tokens":1}}}),
             ),
         ];
         let automations = vec![
@@ -1862,37 +1897,49 @@ mod tests {
             json!({"id":"a4","enabled":true}),
         ];
         let metrics = run_metrics(&runs, &automations);
-        assert_eq!(metrics["runs"], 7);
-        assert_eq!(metrics["completed_runs"], 5);
+        assert_eq!(metrics["runs"], 7 + 1);
+        assert_eq!(metrics["completed_runs"], 6);
         assert_eq!(metrics["failed_runs"], 1);
         assert_eq!(
             metrics["automations_used"], 3,
             "queued runs and deleted automations do not count as used"
         );
-        assert_eq!(metrics["findings"], 4);
-        assert_eq!(metrics["prs_analyzed"], 3, "one per host and pull request");
-        assert_eq!(metrics["prs_last_7d"], 3);
-        assert_eq!(metrics["tokens"]["input"], 765);
-        assert_eq!(metrics["tokens"]["output"], 65);
-        assert_eq!(metrics["tokens"]["total"], 830);
+        assert_eq!(metrics["findings"], 5);
         assert_eq!(
-            metrics["tokens"]["runs_with_usage"], 5,
+            metrics["prs_analyzed"], 5,
+            "one per code host and pull request"
+        );
+        assert_eq!(
+            metrics["prs_last_7d"], 4,
+            "the review from outside the week is not counted twice"
+        );
+        assert_eq!(metrics["tokens"]["input"], 815);
+        assert_eq!(metrics["tokens"]["output"], 74);
+        assert_eq!(metrics["tokens"]["total"], 889);
+        assert_eq!(
+            metrics["tokens"]["runs_with_usage"], 7,
             "runs without usage metadata are not counted as spending nothing"
         );
-        assert_eq!(metrics["severities"]["high"], 1);
-        assert_eq!(metrics["severities"]["medium"], 2);
+        assert_eq!(metrics["weekly_severities"]["high"], 1);
+        assert_eq!(metrics["weekly_severities"]["low"], 1);
+        assert_eq!(metrics["weekly_severities"]["info"], 1);
+        assert_eq!(
+            metrics["weekly_severities"]["medium"], 1,
+            "the week's breakdown leaves out the finding from outside it"
+        );
         let weekly = metrics["weekly"].as_array().unwrap();
         assert_eq!(weekly.len(), 7, "the chart always shows a full week");
         let today_key = now.date_naive().format("%Y-%m-%d").to_string();
         let bucket = weekly.iter().find(|d| d["date"] == today_key).unwrap();
-        assert_eq!(bucket["completed"], 4);
+        assert_eq!(bucket["completed"], 5);
         assert_eq!(bucket["failed"], 1);
-        assert_eq!(bucket["findings"], 3);
+        assert_eq!(bucket["findings"], 4);
         assert_eq!(
-            bucket["tokens"], 830,
+            bucket["tokens"], 841,
             "runs outside the week are not counted"
         );
-        assert_eq!(metrics["weekly_totals"]["tokens"], 830);
+        assert_eq!(metrics["weekly_totals"]["tokens"], 841);
+        assert_eq!(metrics["weekly_totals"]["completed"], 5);
     }
 
     #[test]
@@ -1902,7 +1949,7 @@ mod tests {
         let runs = vec![metric_run(
             RUN_SUCCEEDED,
             started.to_rfc3339(),
-            json!({"started_at": started.to_rfc3339(), "finished_at": finished.to_rfc3339(), "automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":1},"output":{"findings":[],"usage":{"input_tokens":10,"output_tokens":2}}}),
+            json!({"started_at": started.to_rfc3339(), "finished_at": finished.to_rfc3339(), "connection_id":"c1","automation_id":"a1","trigger":{"kind":"pull_request","repository":"acme/api","number":1},"output":{"findings":[],"usage":{"input_tokens":10,"output_tokens":2}}}),
         )];
         let metrics = run_metrics(&runs, &[json!({"id":"a1","enabled":true})]);
         let finished_key = finished.date_naive().format("%Y-%m-%d").to_string();
@@ -1934,17 +1981,69 @@ mod tests {
     }
 
     #[test]
-    fn queue_and_metrics_agree_on_the_success_status() {
-        // Guards the pairing that once drifted: the queue writes this status and
-        // the overview reads it.
-        assert_eq!(RUN_SUCCEEDED, "succeeded");
+    fn the_run_the_queue_finishes_is_the_run_the_overview_counts() {
+        // Nothing here copies the queue's strings: the run body is built by the
+        // same helper the queue uses before `run_metrics` reads it.
         let now = chrono::Utc::now().to_rfc3339();
-        let counted = run_metrics(
-            &[
-                json!({"id":"r1","status":RUN_SUCCEEDED,"created_at":now,"started_at":now,"automation_id":"a1","trigger":{},"output":{}}),
-            ],
-            &[json!({"id":"a1","enabled":true})],
-        );
+        let queued = || json!({"id":"r1","automation_id":"a1","connection_id":"c1","created_at":now,"started_at":now,"trigger":{"kind":"pull_request","repository":"acme/api","number":1},"output":null});
+        let automations = [json!({"id":"a1","enabled":true})];
+
+        let mut done = queued();
+        finish_run(
+            &mut done,
+            Some(crate::types::RunOutput {
+                summary: "Reviewed one file.".into(),
+                findings: vec![crate::types::Finding {
+                    severity: "high".into(),
+                    title: "Double charge".into(),
+                    file: "src/pay.py".into(),
+                    line: Some(41),
+                    explanation: "A retry can charge twice.".into(),
+                    suggestion: "Use an idempotency key.".into(),
+                }],
+                logs: vec![],
+                artifacts: json!({}),
+                usage: json!({"model":"gpt-5.2","input_chars":1200,"passes":1}),
+            }),
+            None,
+            crate::providers::TokenUsage::default(),
+        )
+        .unwrap();
+        let counted = run_metrics(&[done], &automations);
         assert_eq!(counted["completed_runs"], 1);
+        assert_eq!(counted["findings"], 1);
+        assert_eq!(counted["prs_analyzed"], 1);
+        assert_eq!(counted["automations_used"], 1);
+
+        // A provider that answered before the run failed leaves its spend where
+        // the overview can still find it.
+        let mut broken = queued();
+        finish_run(
+            &mut broken,
+            None,
+            Some("provider exploded".into()),
+            crate::providers::TokenUsage {
+                input: Some(30),
+                output: Some(12),
+                reported: true,
+            },
+        )
+        .unwrap();
+        let counted = run_metrics(&[broken], &automations);
+        assert_eq!(counted["failed_runs"], 1);
+        assert_eq!(counted["completed_runs"], 0);
+        assert_eq!(counted["tokens"]["total"], 42);
+
+        let mut cancelled = queued();
+        finish_run(
+            &mut cancelled,
+            None,
+            Some("Run cancelled".into()),
+            Default::default(),
+        )
+        .unwrap();
+        let counted = run_metrics(&[cancelled], &automations);
+        assert_eq!(counted["completed_runs"], 0);
+        assert_eq!(counted["failed_runs"], 0);
     }
 }

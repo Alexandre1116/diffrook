@@ -6,8 +6,9 @@ Self-hosted code review and repository automations for GitHub, GitLab, Bitbucket
 
 Diffrook uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
 
-The instance checks GitHub releases every 15 minutes, and a failed check backs off
-for as long as GitHub asks it to wait. Settings shows the update policy, the
+The instance checks GitHub releases every 15 minutes; after a failed check it waits
+at least a minute and backs off, or waits exactly as long as GitHub asks when the
+server says to. Settings shows the update policy, the
 release channel, the newest release on that channel, and the install button; the
 overview offers a new release once per version and keeps a quieter banner until it
 is installed. Choose manual installation, or automatic in-container updates on your

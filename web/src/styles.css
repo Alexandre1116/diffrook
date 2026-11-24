@@ -2535,11 +2535,29 @@ button:disabled {
 .severity-row {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 7px;
   margin-top: 12px;
 }
 .severity-row .severity {
   text-transform: capitalize;
+}
+.severity-caption {
+  color: #6f7c92;
+  font:
+    9px "DM Mono",
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.stat-loading {
+  min-height: 104px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
 }
 .chart-foot b {
   font:

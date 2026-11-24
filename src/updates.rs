@@ -25,6 +25,23 @@ const FIRST_RETRY: Duration = Duration::from_secs(60);
 const MAX_RETRY: Duration = Duration::from_secs(3600);
 /// How long a manual "check now" must wait before it may hit GitHub again.
 const MANUAL_CHECK_COOLDOWN: i64 = 15;
+/// A release that failed to install this often is left alone until an
+/// administrator asks again, so a broken package is not downloaded forever.
+const INSTALL_FAILURE_LIMIT: u32 = 3;
+
+/// How long to wait before the next release check. A wait GitHub asked for
+/// wins, because it is the only value that matches the quota this instance
+/// really has; plain failures back off to `MAX_RETRY`.
+fn next_wait(failures: u32, hinted: Option<Duration>) -> Duration {
+    const MAX_HINT: Duration = Duration::from_secs(6 * 3600);
+    match hinted {
+        Some(wait) => wait.clamp(FIRST_RETRY, MAX_HINT),
+        None => {
+            let step = 1u32 << failures.saturating_sub(1).min(6);
+            FIRST_RETRY.saturating_mul(step).min(MAX_RETRY)
+        }
+    }
+}
 
 /// What the release loop should do next.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,49 +58,115 @@ pub fn start(state: AppState) {
     tokio::spawn(async move {
         let mut failures = 0u32;
         loop {
-            match refresh(&state).await {
-                Ok(()) => {
-                    failures = 0;
-                    let wait = match install_latest_if_automatic(&state).await {
-                        Ok(AutomaticOutcome::Restarting) => return,
-                        Ok(AutomaticOutcome::Deferred) => {
-                            // Active runs hold an automatic update back; look
-                            // again well before the next scheduled pass.
-                            Duration::from_secs(120)
+            if let Err(e) = refresh(&state).await {
+                failures += 1;
+                tracing::warn!("release check failed: {e:#}");
+                let hinted = state.updates.read().await["retry_after"]
+                    .as_u64()
+                    .map(Duration::from_secs);
+                tokio::time::sleep(next_wait(failures, hinted)).await;
+                continue;
+            }
+            failures = 0;
+            // An update can be held back by running automations. Retry the
+            // install on a short timer without asking GitHub again: the release
+            // list cannot have changed, and every fetch spends a quota.
+            let mut waited = Duration::ZERO;
+            loop {
+                match install_due_update(&state).await {
+                    Ok(AutomaticOutcome::Restarting) => return,
+                    Ok(AutomaticOutcome::Deferred) => {
+                        let step = Duration::from_secs(120);
+                        if waited + step >= CHECK_INTERVAL {
+                            break;
                         }
-                        Ok(AutomaticOutcome::Idle) => CHECK_INTERVAL,
-                        Err(e) => {
-                            tracing::error!("automatic update failed: {e:#}");
-                            CHECK_INTERVAL
-                        }
-                    };
-                    tokio::time::sleep(wait).await;
-                }
-                Err(e) => {
-                    failures += 1;
-                    tracing::warn!("release check failed: {e:#}");
-                    // GitHub answers a rate-limited client with a reset time;
-                    // honouring it is what lets an instance recover instead of
-                    // hammering the same limit forever.
-                    let hinted = state.updates.read().await["retry_after"]
-                        .as_i64()
-                        .map(|seconds| Duration::from_secs(seconds.max(0) as u64));
-                    let backoff = FIRST_RETRY
-                        .saturating_mul(1u32 << failures.min(4).saturating_sub(1))
-                        .min(MAX_RETRY);
-                    let wait = hinted.unwrap_or(backoff).clamp(FIRST_RETRY, MAX_RETRY);
-                    tokio::time::sleep(wait).await;
+                        tokio::time::sleep(step).await;
+                        waited += step;
+                    }
+                    Ok(AutomaticOutcome::Idle) => break,
+                    Err(e) => {
+                        tracing::error!("automatic update failed: {e:#}");
+                        break;
+                    }
                 }
             }
+            tokio::time::sleep(CHECK_INTERVAL.saturating_sub(waited)).await;
         }
     });
 }
 
+/// Why a release check failed, and how long GitHub asked the instance to wait.
+struct CheckFailure {
+    message: String,
+    retry_after: Option<u64>,
+}
+
+impl CheckFailure {
+    fn plain<E: Into<anyhow::Error>>(e: E) -> Self {
+        Self {
+            message: format!("{:#}", e.into()),
+            retry_after: None,
+        }
+    }
+
+    fn limited<E: Into<anyhow::Error>>(e: E, headers: &reqwest::header::HeaderMap) -> Self {
+        Self {
+            message: format!("{:#}", e.into()),
+            retry_after: retry_after(headers).map(|wait| wait.as_secs()),
+        }
+    }
+}
+
+/// Replaces the cached release list. Every failure is written into
+/// `state.updates`, because that is the value Settings reads to decide what the
+/// administrator may believe about being up to date.
 async fn refresh(state: &AppState) -> Result<()> {
+    // Every attempt is stamped, successful or not, so a manual "check now"
+    // cannot be used to hammer GitHub while checks are already failing.
+    let attempted = chrono::Utc::now().to_rfc3339();
+    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(&attempted)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not record the release check attempt: {e:#}");
+    }
+    match load_releases(state).await {
+        Ok(mut value) => {
+            // A healthy check must not erase why the last automatic install
+            // failed, as long as that release is still being offered.
+            let previous = state.updates.read().await.clone();
+            let stale = previous["install_error"]["tag"]
+                .as_str()
+                .is_some_and(|tag| {
+                    value["releases"]
+                        .as_array()
+                        .is_some_and(|rs| rs.iter().any(|r| r["tag"] == tag))
+                });
+            if stale {
+                value["install_error"] = previous["install_error"].clone();
+            }
+            *state.updates.write().await = value;
+            Ok(())
+        }
+        Err(failure) => {
+            let mut value = state.updates.write().await;
+            value["error"] = json!(failure.message);
+            value["retry_after"] = match failure.retry_after {
+                Some(seconds) => json!(seconds),
+                None => Value::Null,
+            };
+            Err(anyhow::anyhow!(failure.message))
+        }
+    }
+}
+
+async fn load_releases(state: &AppState) -> std::result::Result<Value, CheckFailure> {
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .timeout(Duration::from_secs(20))
-        .build()?;
+        .build()
+        .map_err(CheckFailure::plain)?;
     let response = client
         .get(RELEASES)
         .header(
@@ -92,33 +175,31 @@ async fn refresh(state: &AppState) -> Result<()> {
         )
         .send()
         .await
-        .context("requesting GitHub releases")?;
+        .context("requesting GitHub releases")
+        .map_err(CheckFailure::plain)?;
     let status = response.status();
     let headers = response.headers().clone();
-    let bytes = crate::network::read_body(response, 4 * 1024 * 1024).await?;
+    let bytes = crate::network::read_body(response, 4 * 1024 * 1024)
+        .await
+        .map_err(CheckFailure::plain)?;
     if !status.is_success() {
-        let retry_after = retry_after(&headers);
-        let mut value = state.updates.write().await;
-        value["error"] = json!(format!("GitHub releases API returned HTTP {status}"));
-        value["retry_after"] = retry_after
-            .map(|wait| json!(wait.as_secs()))
-            .unwrap_or(Value::Null);
-        bail!("GitHub releases API returned HTTP {status}");
+        return Err(CheckFailure::limited(
+            anyhow::anyhow!("GitHub releases API returned HTTP {status}"),
+            &headers,
+        ));
     }
-    let raw: Vec<Value> = match serde_json::from_slice(&bytes) {
-        Ok(releases) => releases,
-        Err(e) => {
-            let mut value = state.updates.write().await;
-            value["error"] = json!("GitHub release list could not be read");
-            bail!("decoding GitHub release list: {e}");
-        }
+    let raw: Vec<Value> = serde_json::from_slice(&bytes)
+        .context("decoding GitHub release list")
+        .map_err(CheckFailure::plain)?;
+    let current = match semver::Version::parse(env!("CARGO_PKG_VERSION")) {
+        Ok(version) => version,
+        Err(e) => return Err(CheckFailure::plain(anyhow::anyhow!(e))),
     };
-    let current =
-        semver::Version::parse(env!("CARGO_PKG_VERSION")).context("parsing current version")?;
     let failed = tokio::fs::read_to_string(state.data_dir.join("failed-update.txt"))
         .await
         .unwrap_or_default();
     let failed = failed.trim();
+    let install_failures = install_failures(state).await;
     let mut releases = Vec::new();
     for release in raw {
         if release["draft"] == true {
@@ -141,6 +222,7 @@ async fn refresh(state: &AppState) -> Result<()> {
             "prerelease": release["prerelease"] == true, "published_at": release["published_at"],
             "url": release["html_url"], "newer": newer,
             "rolled_back": !failed.is_empty() && release["tag_name"].as_str() == Some(failed),
+            "install_failures": release_failures(&install_failures, release["tag_name"].as_str().unwrap_or("")),
             "supported": cfg!(target_os = "linux") && asset.is_some(), "asset_url": asset.and_then(|a| a["browser_download_url"].as_str()),
             "asset_digest": asset.and_then(|a| a["digest"].as_str()),
             "asset_size": asset.and_then(|a| a["size"].as_u64()).unwrap_or(0)
@@ -156,8 +238,9 @@ async fn refresh(state: &AppState) -> Result<()> {
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.checked_at',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(&now).execute(&state.db).await {
         tracing::warn!("could not record the release check time: {e:#}");
     }
-    *state.updates.write().await = json!({"current_version":current.to_string(),"releases":releases,"checked_at":now,"error":null,"retry_after":null});
-    Ok(())
+    Ok(
+        json!({"current_version":current.to_string(),"releases":releases,"checked_at":now,"error":null,"retry_after":null,"last_attempt":now}),
+    )
 }
 
 /// The wait GitHub asks for when it refuses a request, from `Retry-After` or the
@@ -177,6 +260,70 @@ fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
     let seconds = reset - chrono::Utc::now().timestamp();
     // Add a small margin so the next attempt never lands right on the boundary.
     Some(Duration::from_secs((seconds + 5).max(0) as u64))
+}
+
+/// Releases whose automatic install failed, counted in the database so a broken
+/// package is not downloaded again after every restart.
+async fn install_failures(state: &AppState) -> std::collections::HashMap<String, u32> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM app_settings WHERE key='updates.install_failures'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+    .and_then(|stored| serde_json::from_str(&stored).ok())
+    .unwrap_or_default()
+}
+
+fn release_failures(failures: &std::collections::HashMap<String, u32>, tag: &str) -> Value {
+    match failures.get(tag) {
+        Some(count) => json!(*count),
+        None => Value::Null,
+    }
+}
+
+/// Counts a failed automatic install and leaves the reason where Settings can
+/// show it. Without this an instance on the automatic policy can sit on an old
+/// version forever while the page still looks healthy.
+async fn record_install_failure(state: &AppState, tag: &str, message: &str) {
+    let mut counts = install_failures(state).await;
+    let attempts = counts.entry(tag.to_owned()).or_insert(0);
+    *attempts = attempts.saturating_add(1);
+    let attempts = *attempts;
+    let stored = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_owned());
+    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.install_failures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(&stored)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not record the failed update: {e:#}");
+    }
+    let mut value = state.updates.write().await;
+    value["install_error"] = json!({
+        "tag": tag,
+        "message": message,
+        "attempts": attempts,
+        "at": chrono::Utc::now().to_rfc3339(),
+    });
+}
+
+/// An explicit install attempt resets the count for that release, so an
+/// administrator who retries on purpose is not blocked by earlier failures.
+async fn clear_install_failure(state: &AppState, tag: &str) {
+    let mut counts = install_failures(state).await;
+    if counts.remove(tag).is_none() {
+        return;
+    }
+    let stored = serde_json::to_string(&counts).unwrap_or_else(|_| "{}".to_owned());
+    if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.install_failures',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(&stored)
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not clear the failed update: {e:#}");
+    }
+    state.updates.write().await["install_error"] = Value::Null;
 }
 
 async fn policy(state: &AppState) -> Option<String> {
@@ -218,41 +365,111 @@ async fn latest_available(state: &AppState) -> Option<String> {
         .await
         .ok();
     let beta = channel(state).await == "beta";
+    let failures = install_failures(state).await;
     let updates = state.updates.read().await;
-    automatic_release(updates["releases"].as_array()?, failed.as_deref(), beta)
+    automatic_release(
+        updates["releases"].as_array()?,
+        failed.as_deref(),
+        beta,
+        &failures,
+    )
 }
 
-fn automatic_release(releases: &[Value], failed: Option<&str>, beta: bool) -> Option<String> {
+fn automatic_release(
+    releases: &[Value],
+    failed: Option<&str>,
+    beta: bool,
+    failures: &std::collections::HashMap<String, u32>,
+) -> Option<String> {
+    // Only the newest release on the channel is considered: installing an older
+    // one than the page is offering would leave the instance and the UI telling
+    // different stories, and a release that failed often enough is left alone.
     releases
         .iter()
-        .find(|release| {
-            on_channel(release, beta)
-                && release["supported"] == true
+        .find(|release| on_channel(release, beta))
+        .filter(|release| {
+            let tag = release["tag"].as_str().unwrap_or("");
+            release["supported"] == true
                 && failed != release["tag"].as_str()
+                && failures
+                    .get(tag)
+                    .is_none_or(|count| *count < INSTALL_FAILURE_LIMIT)
         })
         .and_then(|release| release["tag"].as_str().map(str::to_owned))
 }
 
-/// Returns whether an update was staged and the service is restarting.
-async fn install_latest_if_automatic(state: &AppState) -> Result<AutomaticOutcome> {
+/// An update the administrator asked for while automations were still running,
+/// so the promise that installing waits is kept even after a restart.
+async fn pending_install(state: &AppState) -> Option<String> {
+    sqlx::query_scalar::<_, String>(
+        "SELECT value FROM app_settings WHERE key='updates.pending_install'",
+    )
+    .fetch_optional(&state.db)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn set_pending_install(state: &AppState, tag: &str) -> anyhow::Result<()> {
+    sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.pending_install',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(tag)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+async fn clear_pending_install(state: &AppState) {
+    if let Err(e) = sqlx::query("DELETE FROM app_settings WHERE key='updates.pending_install'")
+        .execute(&state.db)
+        .await
+    {
+        tracing::warn!("could not clear the queued update: {e:#}");
+    }
+}
+
+/// Installs whatever update is due: first one the administrator queued by hand,
+/// then the newest release when the automatic policy asks for it.
+async fn install_due_update(state: &AppState) -> Result<AutomaticOutcome> {
+    let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
+        .fetch_one(&state.db)
+        .await?;
+    if let Some(tag) = pending_install(state).await {
+        if active_runs > 0 {
+            tracing::info!(
+                "the queued update to {tag} still waits for {active_runs} active run(s)"
+            );
+            return Ok(AutomaticOutcome::Deferred);
+        }
+        clear_pending_install(state).await;
+        clear_install_failure(state, &tag).await;
+        if let Err(e) = install(state, &tag)
+            .await
+            .with_context(|| format!("installing the queued {tag}"))
+        {
+            record_install_failure(state, &tag, &format!("{e:#}")).await;
+            return Err(e);
+        }
+        return Ok(AutomaticOutcome::Restarting);
+    }
     if policy(state).await.as_deref() != Some("automatic") {
         return Ok(AutomaticOutcome::Idle);
     }
     let Some(tag) = latest_available(state).await else {
         return Ok(AutomaticOutcome::Idle);
     };
-    let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
-        .fetch_one(&state.db)
-        .await?;
     if active_runs > 0 {
         tracing::info!(
             "deferring the automatic update to {tag} while {active_runs} automation run(s) are active"
         );
         return Ok(AutomaticOutcome::Deferred);
     }
-    install(state, &tag)
+    if let Err(e) = install(state, &tag)
         .await
-        .with_context(|| format!("installing {tag}"))?;
+        .with_context(|| format!("installing {tag}"))
+    {
+        record_install_failure(state, &tag, &format!("{e:#}")).await;
+        return Err(e);
+    }
     Ok(AutomaticOutcome::Restarting)
 }
 
@@ -472,6 +689,7 @@ fn offer_value(release: Option<&Value>) -> Value {
             "prerelease": r["prerelease"],
             "supported": r["supported"],
             "rolled_back": r["rolled_back"],
+            "install_failures": r["install_failures"],
             "published_at": r["published_at"],
             "url": r["url"],
         }),
@@ -497,6 +715,7 @@ pub async fn api(State(state): State<AppState>, headers: HeaderMap) -> Response 
     value["policy"] = json!(policy(&state).await.unwrap_or_else(|| "manual".into()));
     value["channel"] = json!(channel(&state).await);
     value["latest"] = offer_in(&value, beta);
+    value["pending_install"] = json!(pending_install(&state).await);
     Json(value).into_response()
 }
 
@@ -527,7 +746,7 @@ pub async fn set_policy(
         );
     }
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.policy',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(mode).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    automatic_response(install_latest_if_automatic(&state).await, "mode", mode).await
+    automatic_response(install_due_update(&state).await, "mode", mode).await
 }
 
 /// Turns an automatic-update attempt into the JSON both settings endpoints
@@ -563,61 +782,96 @@ pub async fn set_channel(
         return error(StatusCode::BAD_REQUEST, "Choose stable or beta releases");
     };
     if let Err(e) = sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.channel',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(channel).execute(&state.db).await { return error(StatusCode::INTERNAL_SERVER_ERROR, e); }
-    automatic_response(
-        install_latest_if_automatic(&state).await,
-        "channel",
-        channel,
-    )
-    .await
+    automatic_response(install_due_update(&state).await, "channel", channel).await
 }
 
 /// Runs a release check on demand so an administrator can confirm the GitHub
 /// release feed without waiting for the next scheduled pass. Repeated clicks are
 /// throttled, because every one of them is a call to GitHub's rate-limited API.
+/// Clears the manual release-check flag when the request finishes, however it
+/// finishes, so a failed check cannot leave the button disabled forever.
+struct CheckGuard(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for CheckGuard {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 pub async fn check_now(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Err(r) = crate::routes::guard(&state, &headers, true).await {
         return r;
     }
-    let last_check: Option<String> =
-        sqlx::query_scalar("SELECT value FROM app_settings WHERE key='updates.checked_at'")
+    // Two administrators clicking at the same moment share one GitHub request.
+    if state
+        .release_check_busy
+        .swap(true, std::sync::atomic::Ordering::SeqCst)
+    {
+        return error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "A release check is already running.",
+        );
+    }
+    let _check = CheckGuard(state.release_check_busy.clone());
+    // The cooldown counts attempts, not successes: a check that GitHub refused
+    // spent the same quota as one that worked.
+    let last_attempt: Option<String> =
+        sqlx::query_scalar("SELECT value FROM app_settings WHERE key='updates.last_attempt'")
             .fetch_optional(&state.db)
             .await
             .ok()
             .flatten();
-    if let Some(stored) = last_check.as_deref() {
-        let recent = chrono::DateTime::parse_from_rfc3339(stored)
-            .map(|when| {
-                chrono::Utc::now()
-                    .signed_duration_since(when.with_timezone(&chrono::Utc))
-                    .num_seconds()
-                    < MANUAL_CHECK_COOLDOWN
-            })
-            .unwrap_or(false);
-        if recent {
-            return error(
-                StatusCode::TOO_MANY_REQUESTS,
-                format!(
-                    "Already checked moments ago. Try again in {MANUAL_CHECK_COOLDOWN} seconds."
-                ),
-            );
+    let updates_now = state.updates.read().await.clone();
+    let hinted = updates_now["retry_after"].as_u64().unwrap_or(0) as i64;
+    if let Some(stored) = last_attempt.as_deref() {
+        if let Ok(when) = chrono::DateTime::parse_from_rfc3339(stored) {
+            let elapsed = chrono::Utc::now()
+                .signed_duration_since(when.with_timezone(&chrono::Utc))
+                .num_seconds();
+            let wait = MANUAL_CHECK_COOLDOWN.max(hinted).saturating_sub(elapsed);
+            if wait > 0 {
+                let reason = if hinted > 0 && hinted >= elapsed {
+                    "GitHub is limiting these checks"
+                } else {
+                    "A check already ran"
+                };
+                return error(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    format!("{reason} moments ago. Try again in {wait} seconds."),
+                );
+            }
         }
     }
     if let Err(e) = refresh(&state).await {
+        let updates = state.updates.read().await;
+        let wait = updates["retry_after"].as_u64();
         return error(
             StatusCode::BAD_GATEWAY,
-            format!("GitHub release check failed: {e:#}"),
+            match wait {
+                Some(seconds) => format!(
+                    "GitHub release check failed: {e:#}. The next automatic retry waits {seconds} seconds."
+                ),
+                None => format!("GitHub release check failed: {e:#}"),
+            },
         );
     }
-    let outcome = install_latest_if_automatic(&state).await;
+    let outcome = install_due_update(&state).await;
     let updates = state.updates.read().await.clone();
     let beta = channel(&state).await == "beta";
-    let restarting = matches!(outcome, Ok(AutomaticOutcome::Restarting));
+    let (restarting, deferred, install_error) = match &outcome {
+        Ok(AutomaticOutcome::Restarting) => (true, false, None),
+        Ok(AutomaticOutcome::Deferred) => (false, true, None),
+        Ok(AutomaticOutcome::Idle) => (false, false, None),
+        Err(e) => (false, false, Some(format!("{e:#}"))),
+    };
     Json(json!({
         "ok": true,
         "current_version": updates["current_version"],
         "checked_at": updates["checked_at"],
         "latest": offer_in(&updates, beta),
         "restarting": restarting,
+        "deferred": deferred,
+        "install_error": install_error,
     }))
     .into_response()
 }
@@ -639,9 +893,44 @@ pub async fn apply(
             "In-container updates require Linux",
         );
     }
+    let active_runs: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or(0);
+    // An explicit request always restarts the failure counter for that release.
+    clear_install_failure(&state, tag).await;
+    if active_runs > 0 {
+        // The interface promises an update waits for running automations, so
+        // the request is recorded and carried out when they finish, even if the
+        // container restarts in between.
+        if let Err(e) = set_pending_install(&state, tag).await {
+            return error(StatusCode::INTERNAL_SERVER_ERROR, e);
+        }
+        let waiter = state.clone();
+        tokio::spawn(async move {
+            for _ in 0..60 {
+                let running: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM runs WHERE status='running'")
+                        .fetch_one(&waiter.db)
+                        .await
+                        .unwrap_or(0);
+                if running == 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs(15)).await;
+            }
+            if let Err(e) = install_due_update(&waiter).await {
+                tracing::error!("queued update failed: {e:#}");
+            }
+        });
+        return Json(json!({"ok":true,"queued":true,"restarting":false})).into_response();
+    }
     match install(&state, tag).await {
         Ok(()) => Json(json!({"ok":true,"restarting":true})).into_response(),
-        Err(e) => error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}")),
+        Err(e) => {
+            clear_pending_install(&state).await;
+            error(StatusCode::BAD_REQUEST, format!("Update failed: {e:#}"))
+        }
     }
 }
 
@@ -811,13 +1100,15 @@ mod tests {
             "supported": true,
         })];
         assert!(offered_release(&releases, false).is_none());
-        assert!(automatic_release(&releases, None, false).is_none());
+        assert!(
+            automatic_release(&releases, None, false, &std::collections::HashMap::new()).is_none()
+        );
         assert_eq!(
             offered_release(&releases, true).and_then(|r| r["tag"].as_str()),
             Some("v1.9.0-beta.1")
         );
         assert_eq!(
-            automatic_release(&releases, None, true).as_deref(),
+            automatic_release(&releases, None, true, &std::collections::HashMap::new()).as_deref(),
             Some("v1.9.0-beta.1")
         );
     }
@@ -860,25 +1151,44 @@ mod tests {
     }
 
     #[test]
-    fn automatic_updates_skip_prereleases_missing_metadata_and_failed_versions() {
+    fn automatic_updates_follow_the_release_the_page_offers() {
         let releases = vec![
-            json!({"tag":"v2.0.0-beta.1","version":"2.0.0-beta.1","newer":true,"supported":true,"prerelease":true}),
-            json!({"tag":"v1.9.0-beta.1","version":"1.9.0-beta.1","newer":true,"supported":true,"prerelease":false}),
-            json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"supported":true}),
-            json!({"tag":"v1.7.0","version":"1.7.0","newer":true,"supported":false,"prerelease":false}),
-            json!({"tag":"v1.6.0","version":"1.6.0","newer":true,"supported":true,"prerelease":false}),
-            json!({"tag":"v1.5.0","version":"1.5.0","newer":true,"supported":true,"prerelease":false}),
+            json!({"tag":"v2.0.0-beta.1","version":"2.0.0-beta.1","newer":true,"prerelease":true,"supported":true}),
+            // A pre-release GitHub left unflagged: the stable channel ignores it.
+            json!({"tag":"v1.9.0-beta.1","version":"1.9.0-beta.1","newer":true,"prerelease":false,"supported":true}),
+            json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"prerelease":false,"supported":true}),
+            json!({"tag":"v1.7.0","version":"1.7.0","newer":true,"prerelease":false,"supported":true}),
+        ];
+        let none = std::collections::HashMap::new();
+        assert_eq!(
+            automatic_release(&releases, None, false, &none).as_deref(),
+            Some("v1.8.0")
+        );
+        assert_eq!(
+            automatic_release(&releases, None, true, &none).as_deref(),
+            Some("v2.0.0-beta.1")
+        );
+        // The newest release on the channel is the only candidate: a rollback
+        // marker stops the update instead of quietly installing an older release
+        // the page never offered.
+        assert_eq!(
+            automatic_release(&releases, Some("v1.8.0"), false, &none),
+            None
+        );
+        let mut failures = std::collections::HashMap::new();
+        failures.insert("v1.8.0".to_string(), INSTALL_FAILURE_LIMIT);
+        assert_eq!(automatic_release(&releases, None, false, &failures), None);
+        // The same holds when the offered release has no package for this host.
+        let unsupported = vec![
+            json!({"tag":"v1.9.0","version":"1.9.0","newer":true,"prerelease":false,"supported":false}),
+            json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"prerelease":false,"supported":true}),
         ];
         assert_eq!(
-            automatic_release(&releases, None, false).as_deref(),
-            Some("v1.6.0")
+            automatic_release(&unsupported, None, false, &none),
+            None,
+            "no package for the offered release means no automatic install"
         );
-        assert_eq!(
-            automatic_release(&releases, Some("v1.6.0"), false).as_deref(),
-            Some("v1.5.0")
-        );
-        assert!(automatic_release(&releases[..4], None, false).is_none());
-        assert!(automatic_release(&[], None, false).is_none());
+        assert!(automatic_release(&[], None, false, &none).is_none());
     }
 
     #[test]
@@ -889,16 +1199,24 @@ mod tests {
             json!({"tag":"v1.9.0-beta.1","version":"1.9.0-beta.1","newer":true,"supported":true,"prerelease":true}),
             json!({"tag":"v1.8.0","version":"1.8.0","newer":true,"supported":true,"prerelease":false}),
         ];
+        // The newest beta has no package for this platform, and neither does the
+        // automatic installer invent one: it waits for the next release rather
+        // than installing something the page never offered.
         assert_eq!(
-            automatic_release(&releases, None, true).as_deref(),
-            Some("v1.9.0-beta.1")
+            automatic_release(&releases, None, true, &std::collections::HashMap::new()),
+            None
         );
         assert_eq!(
-            automatic_release(&releases, Some("v1.9.0-beta.1"), true).as_deref(),
-            Some("v1.8.0")
+            automatic_release(
+                &releases,
+                Some("v1.9.0-beta.1"),
+                true,
+                &std::collections::HashMap::new()
+            ),
+            None
         );
         assert_eq!(
-            automatic_release(&releases, None, false).as_deref(),
+            automatic_release(&releases, None, false, &std::collections::HashMap::new()).as_deref(),
             Some("v1.8.0")
         );
     }
@@ -995,5 +1313,70 @@ mod tests {
         let bytes = compressed.finish().unwrap();
         assert!(extract_release(dir.path(), "v1.2.4", &bytes).is_err());
         assert!(!dir.path().parent().unwrap().join("escaped").exists());
+    }
+
+    #[test]
+    fn a_release_that_keeps_failing_to_install_is_left_alone() {
+        let releases = vec![json!({
+            "tag": "v1.5.0", "version": "1.5.0", "newer": true, "prerelease": false, "supported": true
+        })];
+        let mut failures = std::collections::HashMap::new();
+        failures.insert("v1.5.0".to_string(), INSTALL_FAILURE_LIMIT - 1);
+        assert_eq!(
+            automatic_release(&releases, None, false, &failures).as_deref(),
+            Some("v1.5.0"),
+            "one more attempt is allowed before the release is left alone"
+        );
+        failures.insert("v1.5.0".to_string(), INSTALL_FAILURE_LIMIT);
+        assert_eq!(
+            automatic_release(&releases, None, false, &failures),
+            None,
+            "a broken package is not downloaded forever"
+        );
+        failures.clear();
+        assert_eq!(
+            automatic_release(&releases, None, false, &failures).as_deref(),
+            Some("v1.5.0"),
+            "an explicit retry restarts the attempts"
+        );
+    }
+
+    #[test]
+    fn a_release_offer_carries_its_own_failure_count() {
+        let mut failures = std::collections::HashMap::new();
+        failures.insert("v2.0.0".to_string(), 2u32);
+        let releases = vec![json!({
+            "tag": "v2.0.0", "version": "2.0.0", "newer": true, "prerelease": false,
+            "supported": true, "url": null, "published_at": null,
+            "install_failures": release_failures(&failures, "v2.0.0"),
+        })];
+        let offer = offer_value(offered_release(&releases, false));
+        assert_eq!(
+            offer["install_failures"], 2,
+            "Settings can say the last attempt failed"
+        );
+    }
+
+    #[test]
+    fn githubs_own_wait_outranks_the_backoff_ladder() {
+        assert_eq!(next_wait(1, None), FIRST_RETRY);
+        assert_eq!(next_wait(2, None), Duration::from_secs(120));
+        assert_eq!(next_wait(3, None), Duration::from_secs(240));
+        assert_eq!(
+            next_wait(20, None),
+            MAX_RETRY,
+            "plain failures stop escalating"
+        );
+        assert_eq!(
+            next_wait(1, Some(Duration::from_secs(7200))),
+            Duration::from_secs(7200),
+            "a reset GitHub reports is longer than any ladder value"
+        );
+        assert_eq!(next_wait(1, Some(Duration::from_secs(1))), FIRST_RETRY);
+        assert_eq!(
+            next_wait(1, Some(Duration::from_secs(30 * 24 * 3600))),
+            Duration::from_secs(6 * 3600),
+            "an absurd hint is still not slept through"
+        );
     }
 }
