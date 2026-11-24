@@ -6,7 +6,15 @@ Self-hosted code review and repository automations for GitHub, GitLab, Bitbucket
 
 Diffrook uses a Rust service, a React web interface, and SQLite. The application runs in one Docker container with a persistent data volume. Connect it to an existing Ollama instance or an OpenAI-compatible or Anthropic endpoint.
 
-The dashboard checks GitHub releases, including pre-releases, every 15 minutes. Choose manual installation, including pre-releases, or automatic in-container updates to stable releases only. Automatic updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
+The instance checks GitHub releases every 15 minutes; after a failed check it waits
+at least a minute and backs off, or waits as long as GitHub asks, up to six hours.
+Settings shows the update policy, the
+release channel, the newest release on that channel, and the install button; the
+overview offers a new release once per version, as a dialog first and then a
+quieter banner until it is installed. Choose manual installation, or automatic
+in-container updates on your
+channel: stable releases only unless you switch to the beta channel. Automatic
+updates are supported on Linux x86-64 and ARM64 Docker deployments. Each release publishes a matching update package; Diffrook verifies GitHub's SHA-256 asset digest, stages the package in `/data`, and restarts gracefully after active runs have finished. Asking for an update while automations run queues it, and the queued update survives a restart; you can cancel it from Settings, and it is dropped if you switch release channel or the instance already runs that release. A release whose automatic install fails three times within six hours is left alone, with the reason shown in Settings, until you install it yourself. It rolls back to the image version if the updated process fails before the server starts. Back up `/data` before installing an update. Other platforms can inspect releases and update through their normal container workflow.
 
 This is **v1.0.1**, a patch release with public terms of use and a privacy policy. The self-hosted Individual plan is free and available by default. Paid self-hosted plans and all Cloud plans are Coming soon. The free Freelancer and Teams beta offer has ended;
 new paid-plan selection and checkout are unavailable. Existing Individual usage

@@ -57,7 +57,6 @@ body {
 .run-title small,
 .trigger-label,
 .step-copy small,
-.quick-card > button small,
 .empty p,
 .automation-desc,
 .automation-name > span,
@@ -78,10 +77,15 @@ body {
 .detail-stats small,
 .finding-top,
 .findings article > p,
-.release-copy p,
-.release-list small,
-.release-controls label,
-.release-controls > small {
+.update-copy small,
+.update-controls label,
+.update-controls small,
+.chart-legend,
+.chart-col small,
+.chart-foot,
+.severity-caption,
+.stat-loading,
+.chart-empty {
   color: #9aa9bd;
 }
 
@@ -92,7 +96,6 @@ body {
 .panel-title h3,
 .run-title b,
 .step-copy b,
-.quick-card > button b,
 .empty h3,
 .automation-name h3,
 .action-pill b,
@@ -111,12 +114,11 @@ body {
 .detail-stats b,
 .detail-section h4,
 .findings article > b,
-.release-copy h2,
-.release-list a {
+.update-copy b,
+.chart-foot b {
   color: #e8eef8;
 }
 
-.instance-pill,
 .progress-chip,
 .kind-badge {
   background: #202b39;
@@ -125,7 +127,6 @@ body {
 }
 
 .icon-btn,
-.quick-card > button,
 .row-arrow,
 .step-arrow,
 .resource-details svg {
@@ -155,8 +156,7 @@ body {
 }
 
 .text-btn,
-.banner-link,
-.quick-card > button:hover b {
+.banner-link {
   color: #91b5ff;
 }
 
@@ -186,27 +186,40 @@ body {
   box-shadow: 0 5px 16px #090e1640;
 }
 
-.release-panel {
-  background: linear-gradient(120deg, #202936 0%, #243247 100%);
-  border-color: #3b4d66;
+.update-banner {
+  background: linear-gradient(120deg, #1f2c42 0%, #24354f 100%);
+  border-color: #3b5680;
 }
 
-.release-list a {
-  border-color: #455977;
-  background: #253449;
+.update-banner > svg {
+  color: #91b5ff;
 }
 
-.release-list a span {
-  color: #9bb8e8;
-}
-
-.release-controls select {
+.update-controls select {
   background: #151e29;
   border: 1px solid #3b4b5f;
   border-radius: 5px;
   color: #edf3fb;
   padding: 7px 9px;
   font-size: 11px;
+}
+
+.chart-foot {
+  border-top-color: #344153;
+}
+.chart-bar {
+  background: #2a3648;
+}
+.chart-bar.quiet {
+  background: #263143;
+}
+.bar-seg.completed,
+.swatch.completed {
+  background: #477cf0;
+}
+.bar-seg.failed,
+.swatch.failed {
+  background: #d9544f;
 }
 
 .data-table th,
@@ -272,7 +285,6 @@ body {
 
 .run-glyph,
 .step-icon,
-.quick-spark,
 .empty-icon,
 .automation-symbol,
 .action-fix_pr,
@@ -350,7 +362,6 @@ body {
 }
 
 .step,
-.quick-card > button,
 .settings-line,
 .automation-meta,
 .automation-card-foot,

@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::sync::Arc;
 
 #[derive(Clone)]
 pub struct EngineContext {
@@ -9,6 +10,10 @@ pub struct EngineContext {
     pub provider: Value,
     pub trigger: Value,
     pub client: reqwest::Client,
+    /// Tokens the providers reported while this run was in flight. Sharing the
+    /// cell keeps spend from failed runs billable in the overview, where the
+    /// money was really spent.
+    pub usage: Arc<std::sync::Mutex<crate::providers::TokenUsage>>,
     /// Set when the plan refuses organization-owned repositories; holds the
     /// explanation that follows the repository name in the run error.
     pub organization_restriction: Option<&'static str>,

@@ -240,6 +240,209 @@ async fn update_policy_is_authenticated_and_persisted() {
 }
 
 #[tokio::test]
+async fn manual_release_check_is_authenticated_and_throttled() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    assert_eq!(
+        request(&app, "POST", "/api/updates/check", Some(json!({})), None)
+            .await
+            .0,
+        StatusCode::UNAUTHORIZED
+    );
+    let cookie = admin(&app, &state).await;
+    // A check that just happened must not spend another request from GitHub's
+    // limited unauthenticated quota, the limit that used to strand instances.
+    // The stamp counts attempts, so a check that failed is throttled too.
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO app_settings(key,value) VALUES('updates.last_attempt',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/check",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    let message = body["error"].as_str().unwrap_or_default();
+    assert!(message.contains("moments ago"), "{message}");
+    assert!(message.contains("Try again in"), "{message}");
+    // No successful check has ever happened, so the page must not claim the
+    // instance is up to date while it is being throttled.
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["checked_at"].is_null(),
+        "a throttled attempt must not look like a completed check"
+    );
+}
+
+#[tokio::test]
+async fn a_queued_update_survives_and_can_be_cancelled() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    let cookie = admin(&app, &state).await;
+    // A release the updater has already checked, and a run that is in progress.
+    *state.updates.write().await = json!({
+        "current_version": env!("CARGO_PKG_VERSION"),
+        "releases": [{
+            "tag": "v9.9.9", "version": "9.9.9", "newer": true, "prerelease": false,
+            "supported": true, "url": "https://github.com/Alexandre1116/diffrook/releases/tag/v9.9.9",
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v9.9.9/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1024
+        }],
+        "checked_at": chrono::Utc::now().to_rfc3339(),
+        "error": null
+    });
+    let now = chrono::Utc::now().to_rfc3339();
+    let run = json!({"id":"busy","automation_id":"a1","status":"running","created_at":now});
+    sqlx::query("INSERT INTO runs(id,automation_id,body,created_at,status) VALUES('busy','a1',?,?, 'running')")
+        .bind(run.to_string())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v9.9.9"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["queued"], true,
+        "the install waits for the running job"
+    );
+    assert_eq!(body["restarting"], false);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(
+        updates["pending_install"], "v9.9.9",
+        "the request is stored, not just remembered in this process"
+    );
+    // A release without a usable package is refused before anything is queued.
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v0.0.1"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("not a release this instance has checked"),
+        "{}",
+        body["error"]
+    );
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/cancel",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["pending_install"].is_null(),
+        "cancelling really drops the queued install"
+    );
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/cancel",
+        Some(json!({})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "nothing left to cancel");
+}
+
+#[tokio::test]
+async fn switching_channel_back_to_stable_drops_a_queued_pre_release() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = diffrook::core::AppState::new(dir.path()).await.unwrap();
+    let app = diffrook::routes::router(state.clone());
+    let cookie = admin(&app, &state).await;
+    *state.updates.write().await = json!({
+        "current_version": env!("CARGO_PKG_VERSION"),
+        "releases": [{
+            "tag": "v99.0.0-rc.1", "version": "99.0.0-rc.1", "newer": true, "prerelease": true,
+            "supported": true, "url": "https://github.com/Alexandre1116/diffrook/releases/tag/v99.0.0-rc.1",
+            "asset_url": "https://github.com/Alexandre1116/diffrook/releases/download/v99.0.0-rc.1/diffrook-linux-x86_64.tar.gz",
+            "asset_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+            "asset_size": 1024
+        }],
+        "checked_at": chrono::Utc::now().to_rfc3339(),
+        "error": null
+    });
+    let (status, _, _) = request(
+        &app,
+        "POST",
+        "/api/updates/channel",
+        Some(json!({"channel": "beta"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let now = chrono::Utc::now().to_rfc3339();
+    sqlx::query("INSERT INTO runs(id,automation_id,body,created_at,status) VALUES('busy','a1',?,?,'running')")
+        .bind(json!({"automation_id": "a1"}).to_string())
+        .bind(&now)
+        .execute(&state.db)
+        .await
+        .unwrap();
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/apply",
+        Some(json!({"tag": "v99.0.0-rc.1"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["queued"], true);
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert_eq!(updates["pending_install"], "v99.0.0-rc.1");
+    assert_eq!(
+        updates["pending_version"], "99.0.0-rc.1",
+        "the page prefixes its own v, so it needs the bare version"
+    );
+
+    // Going back to stable must take the queued pre-release with it.
+    let (status, body, _) = request(
+        &app,
+        "POST",
+        "/api/updates/channel",
+        Some(json!({"channel": "stable"})),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["dropped_pending"], "v99.0.0-rc.1",
+        "the change says what it gave up"
+    );
+    let (_, updates, _) = request(&app, "GET", "/api/updates", None, Some(&cookie)).await;
+    assert!(
+        updates["pending_install"].is_null() && updates["pending_version"].is_null(),
+        "a release the channel no longer offers is not left queued: {updates}"
+    );
+}
+
+#[tokio::test]
 async fn strict_inputs_reject_shadow_fields_and_internal_urls_without_writing() {
     let dir = tempfile::tempdir().unwrap();
     let state = diffrook::core::AppState::new(dir.path()).await.unwrap();

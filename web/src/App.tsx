@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import Plans, { type PlanCatalog } from "./Plans";
 import {
-  Activity,
   ArrowDownRight,
   ArrowRight,
   Bot,
@@ -13,7 +12,6 @@ import {
   CircleHelp,
   Clock3,
   Code2,
-  Command,
   Eye,
   EyeOff,
   ExternalLink,
@@ -204,6 +202,35 @@ const date = (s?: string) =>
     : "—";
 const count = (n?: number) => (n ?? 0).toLocaleString();
 const statusClass = (s = "") => `status status-${s.toLowerCase()}`;
+const updateDismissKey = "diffrook.update-dismissed";
+const updatePromptKey = "diffrook.update-prompt-dismissed";
+// A browser or a privacy extension can block storage, so every read and write
+// goes through these helpers: losing a dismissal must never break the app.
+const readStored = (key: string): string | null => {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+};
+const writeStored = (key: string, value: string) => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Storage is unavailable; the offer simply comes back next visit.
+  }
+};
+// Only the last few refused releases are kept, so the keys never pile up.
+const readTagList = (key: string): string[] =>
+  (readStored(key) || "").split(",").filter(Boolean).slice(-10);
+const mergeTag = (list: string[], tag: string): string[] =>
+  [...new Set([...list, tag])].slice(-10);
+const rememberTag = (key: string, tag: string) =>
+  writeStored(key, mergeTag(readTagList(key), tag).join(","));
+const compact = (n?: number) =>
+  n && n >= 1000
+    ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
+    : count(n);
 
 function Mark() {
   return (
@@ -246,6 +273,13 @@ function App() {
     [detail, setDetail] = useState<Obj | null>(null);
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const [showStarPrompt, setShowStarPrompt] = useState(false);
+  const [updatePrompt, setUpdatePrompt] = useState<Obj | null>(null),
+    [updating, setUpdating] = useState(false),
+    [dismissedTags, setDismissedTags] = useState<string[]>(() =>
+      readTagList(updateDismissKey),
+    ),
+    [askedTags, setAskedTags] = useState<string[]>(() => readTagList(updatePromptKey)),
+    [loaded, setLoaded] = useState(false);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
@@ -263,6 +297,7 @@ function App() {
           api<PlanCatalog>("/plans"),
         ]);
       setData({ dashboard, automations, connections, providers, notificationProviders, runs, updates, license, catalog });
+      setLoaded(true);
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -271,10 +306,82 @@ function App() {
   }, [status?.authenticated]);
   // Update settings may stage an update; the server then restarts and stops answering.
   const settleUpdate = async (result: Obj) => {
-    if (!result?.restarting) return reload();
-    setNotice("Update installed. Reconnecting to Diffrook…");
-    window.setTimeout(() => window.location.reload(), 2500);
+    if (result?.restarting) {
+      setNotice("Update installed. Reconnecting to Diffrook…");
+      window.setTimeout(() => window.location.reload(), 2500);
+      return;
+    }
+    if (result?.queued)
+      setNotice(
+        "Automations are still running, so the update is queued. Diffrook restarts as soon as they finish.",
+      );
+    else if (result?.deferred)
+      setNotice("An automation is still running; the update installs as soon as it finishes.");
+    return reload();
   };
+  // Settings always tells the truth about the newest release; only the banner
+  // and the popup respect what this browser chose to ignore.
+  const latest = data.updates.latest || null;
+  const release = latest && !dismissedTags.includes(latest.tag) ? latest : null;
+  const applyUpdate = async (tag: string) => {
+    setUpdating(true);
+    try {
+      await settleUpdate(await api("/updates/apply", "POST", { tag }));
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setUpdating(false);
+    }
+  };
+  const setUpdatePolicy = async (mode: string) => {
+    try {
+      await settleUpdate(await api("/updates/policy", "POST", { mode }));
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const setUpdateChannel = async (channel: string) => {
+    try {
+      const result = await api<Obj>("/updates/channel", "POST", { channel });
+      if (result?.dropped_pending) {
+        // The queue was accepted on the other channel; say out loud that
+        // changing it gave that promise up.
+        setError(
+          `The queued update to v${String(result.dropped_pending).replace(/^v/, "")} was dropped: that release is not on the ${channel} channel.`,
+        );
+      }
+      await settleUpdate(result);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  };
+  const dismissUpdate = (tag: string) => {
+    rememberTag(updateDismissKey, tag);
+    setDismissedTags((current) => mergeTag(current, tag));
+    setUpdatePrompt(null);
+  };
+  const closeUpdatePrompt = (tag: string) => {
+    rememberTag(updatePromptKey, tag);
+    setAskedTags((current) => mergeTag(current, tag));
+    setUpdatePrompt(null);
+  };
+  // One popup per release, and never stacked over a form the admin is filling in.
+  const promptShownFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!release || modal || detail || showStarPrompt) return;
+    if (promptShownFor.current === release.tag || askedTags.includes(release.tag)) return;
+    promptShownFor.current = release.tag;
+    // Remember the offer when it is shown, not only when it is closed: a reload
+    // with the popup still open must not bring a second one.
+    rememberTag(updatePromptKey, release.tag);
+    setAskedTags((current) => mergeTag(current, release.tag));
+    setUpdatePrompt(release);
+  }, [release, askedTags, modal, detail, showStarPrompt]);
+  // The offer can change while the popup is open, for example when the release
+  // channel is switched, so an out-of-date popup never offers another release.
+  useEffect(() => {
+    if (updatePrompt && (!release || release.tag !== updatePrompt.tag)) setUpdatePrompt(null);
+  }, [release, updatePrompt]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
       setError(new URLSearchParams(window.location.search).get("sso_error") === "user_limit"
@@ -513,12 +620,6 @@ function App() {
             <span className="crumb-slash">/</span>
             <strong>{pageTitle}</strong>
           </div>
-          <div className="top-actions">
-            <div className="instance-pill">
-              <span className="live-dot" />
-              API connected
-            </div>
-          </div>
         </header>
         <div className="content">
           {error && (
@@ -540,32 +641,15 @@ function App() {
             <Overview
               data={data}
               busy={busy}
+              loaded={loaded}
               go={setPage}
               openRun={runDetail}
               refresh={reload}
               version={status.version}
-              updates={data.updates}
-              updatePolicy={async (mode) => {
-                try {
-                  await settleUpdate(await api("/updates/policy", "POST", { mode }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-              updateChannel={async (channel) => {
-                try {
-                  await settleUpdate(await api("/updates/channel", "POST", { channel }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
-              applyUpdate={async (tag) => {
-                try {
-                  await settleUpdate(await api("/updates/apply", "POST", { tag }));
-                } catch (e) {
-                  setError((e as Error).message);
-                }
-              }}
+              release={release && !updatePrompt ? release : null}
+              dismissUpdate={dismissUpdate}
+              applyUpdate={applyUpdate}
+              updating={updating}
             />
           )}
           {page === "automations" && (
@@ -701,7 +785,17 @@ function App() {
             />
           )}
           {page === "settings" && (
-            <SettingsPage data={data} notice={setNotice} reload={reload} />
+            <SettingsPage
+              data={data}
+              notice={setNotice}
+              reload={reload}
+              version={status.version}
+              latest={latest}
+              updating={updating}
+              updatePolicy={setUpdatePolicy}
+              updateChannel={setUpdateChannel}
+              applyUpdate={applyUpdate}
+            />
           )}
         </div>
       </main>
@@ -816,6 +910,63 @@ function App() {
               <a className="btn primary" href="https://github.com/Alexandre1116/diffrook" target="_blank" rel="noopener noreferrer" onClick={() => setShowStarPrompt(false)}>
                 <Github size={17} /> Star on GitHub <ExternalLink size={15} />
               </a>
+            </div>
+          </div>
+        </Modal>
+      )}
+      {updatePrompt && (
+        <Modal
+          title={`Diffrook v${updatePrompt.version} is available`}
+          eyebrow="NEW RELEASE"
+          close={() => closeUpdatePrompt(updatePrompt.tag)}
+        >
+          <div className="form-stack">
+            <p>
+              This instance runs v{status.version}; v{updatePrompt.version} is the newest release on
+              your channel.{" "}
+              {updatePrompt.prerelease
+                ? "It is a pre-release from your beta channel. "
+                : ""}
+              {updatePrompt.rolled_back
+                ? "This release failed to start here and was rolled back; install it again only if you know why. "
+                : updatePrompt.supported
+                  ? "Installing it restarts this container once your running automations finish. "
+                  : `${updatePrompt.unsupported_reason || "There is no usable update package for this platform"}, so update through your container workflow. `}
+              {updatePrompt.install_failures
+                ? `Automatic installs of it have failed ${updatePrompt.install_failures} time(s)${updatePrompt.install_parked ? " and are paused until you retry" : ""}. `
+                : ""}
+              Update policy and release channel live in Settings.
+            </p>
+            <div className="form-actions">
+              <button
+                className="btn secondary"
+                type="button"
+                onClick={() => closeUpdatePrompt(updatePrompt.tag)}
+              >
+                Not now
+              </button>
+              <a
+                className="btn secondary"
+                href={updatePrompt.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Release notes <ExternalLink size={14} />
+              </a>
+              {updatePrompt.supported && (
+                <button
+                  className="btn primary"
+                  type="button"
+                  disabled={updating}
+                  onClick={() => {
+                    setUpdatePrompt(null);
+                    void applyUpdate(updatePrompt.tag);
+                  }}
+                >
+                  <ArrowDownRight size={15} />
+                  {updating ? "Installing…" : "Install update"}
+                </button>
+              )}
             </div>
           </div>
         </Modal>
@@ -943,31 +1094,66 @@ function Auth({
 function Overview({
   data,
   busy,
+  loaded,
   go,
   openRun,
   refresh,
   version,
-  updates,
-  updatePolicy,
-  updateChannel,
+  release,
+  dismissUpdate,
   applyUpdate,
+  updating,
 }: {
   data: any;
   busy: boolean;
+  loaded: boolean;
   go: (p: Page) => void;
   openRun: (r: Obj) => void;
   refresh: () => void;
   version: string;
-  updates: Obj;
-  updatePolicy: (mode: string) => Promise<void>;
-  updateChannel: (channel: string) => Promise<void>;
+  release: Obj | null;
+  dismissUpdate: (tag: string) => void;
   applyUpdate: (tag: string) => Promise<void>;
+  updating: boolean;
 }) {
   const d = data.dashboard;
   const latest = (d.recent_runs || data.runs).slice(0, 5);
-  const [updating, setUpdating] = useState(false);
-  const beta = updates.channel === "beta";
-  const release = (updates.releases || []).find((r: Obj) => r.newer && (beta || !r.prerelease));
+  const weekly: Obj[] = d.weekly || [];
+  const totals = d.weekly_totals || {};
+  const tokens = d.tokens || {};
+  const severities = d.weekly_severities || {};
+  // First-run guidance is history, not current state: it stays away once this
+  // instance has had a connection, even if that connection was removed later.
+  const firstRun = !data.connections.length && !d.connection_configured;
+  const steps: {
+    ok: boolean;
+    label: string;
+    sub: string;
+    go: Page;
+    icon: any;
+  }[] = [
+    {
+      ok: data.connections.length > 0,
+      label: "Connect a code host",
+      sub: "GitHub, GitLab, Bitbucket, Forgejo or Gitea",
+      go: "connections",
+      icon: GitBranch,
+    },
+    {
+      ok: data.providers.length > 0,
+      label: "Add an AI provider",
+      sub: "OpenAI, Anthropic or Ollama",
+      go: "providers",
+      icon: Sparkles,
+    },
+    {
+      ok: data.automations.length > 0,
+      label: "Create an automation",
+      sub: "Choose repositories and actions",
+      go: "automations",
+      icon: Bot,
+    },
+  ];
   return (
     <>
       <div className="page-head">
@@ -987,76 +1173,151 @@ function Overview({
           </button>
         </div>
       </div>
-      <div className="welcome-banner">
-        <div className="banner-icon">
-          <Mark />
+      {release && (
+        <div className="update-banner" role="status">
+          <ArrowDownRight size={17} />
+          <span className="update-copy">
+            <b>Diffrook v{release.version} is available</b>
+            <small>
+              This instance runs v{version}.{" "}
+              {release.rolled_back
+                ? "This release failed to start here and was rolled back; install it again only if you know why."
+                : release.supported
+                  ? "Installing waits for running automations, then restarts this container for a few seconds."
+                  : "No update package for this platform yet, so update through your container workflow."}
+            </small>
+          </span>
+          <a
+            className="text-btn"
+            href={release.url}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Release notes <ExternalLink size={14} />
+          </a>
+          {release.supported && (
+            <button
+              className="btn small primary"
+              disabled={updating}
+              onClick={() => void applyUpdate(release.tag)}
+            >
+              {updating ? "Installing…" : "Install update"}
+            </button>
+          )}
+          <button className="text-btn" onClick={() => dismissUpdate(release.tag)}>
+            Hide
+          </button>
         </div>
-        <div>
-          <span className="banner-eyebrow">DIFFROOK IS READY</span>
-          <b>Good code deserves a second set of eyes.</b>
-          <p>
-            Connect a repository and an AI provider to start your first
-            automated review.
-          </p>
+      )}
+      {loaded && firstRun && (
+        <div className="welcome-banner">
+          <div className="banner-icon">
+            <Mark />
+          </div>
+          <div>
+            <span className="banner-eyebrow">DIFFROOK IS READY</span>
+            <b>Good code deserves a second set of eyes.</b>
+            <p>
+              Connect a repository and an AI provider to start your first
+              automated review.
+            </p>
+          </div>
+          <button className="banner-link" onClick={() => go("connections")}>
+            Set up connections <ArrowRight size={16} />
+          </button>
+          <span className="banner-line" />
         </div>
-        <button className="banner-link" onClick={() => go("connections")}>
-          Set up connections <ArrowRight size={16} />
-        </button>
-        <span className="banner-line" />
-      </div>
-      <div className="stat-grid">
+      )}
+      {!loaded ? (
+        <div className="stat-grid" aria-busy="true">
+          {[0, 1, 2, 3].map((index) => (
+            <div key={index} className="stat-card stat-loading" />
+          ))}
+        </div>
+      ) : (
+        <div className="stat-grid">
         <Stat
           label="Automations"
           value={d.automations}
-          hint={`${d.active_automations ?? 0} active`}
+          hint={`${d.active_automations ?? 0} active · ${d.automations_used ?? 0} used`}
           icon={Bot}
         />
-        <Stat label="Runs" value={d.runs} hint="All time" icon={Activity} />
+        <Stat
+          label="Pull requests"
+          value={d.prs_analyzed}
+          hint={`${d.prs_last_7d ?? 0} reviewed in the last 7 days`}
+          icon={GitPullRequest}
+        />
         <Stat
           label="Findings"
           value={d.findings}
-          hint="Across all runs"
+          hint={`From ${d.completed_runs ?? 0} completed runs`}
           icon={TriangleAlert}
         />
-        <div className="stat-card uptime">
-          <div className="stat-top">
-            <span>INSTANCE STATUS</span>
-            <ShieldCheck size={17} />
-          </div>
-          <strong>
-            <i className="live-dot" />
-            API reachable
-          </strong>
-          <small>Version {version}</small>
-        </div>
+        <Stat
+          label="Model tokens"
+          value={tokens.runs_with_usage ? tokens.total : "—"}
+          hint={
+            tokens.runs_with_usage
+              ? `${compact(tokens.input)} in · ${compact(tokens.output)} out · measured in ${tokens.runs_with_usage} of ${tokens.ended_runs ?? 0} runs that ended`
+              : "No token counts reported yet"
+          }
+          icon={Sparkles}
+        />
       </div>
-      <section className="panel-card release-panel">
-        <div className="release-copy">
-          <div className="eyebrow">DIFFROOK RELEASES</div>
-          <h2>{release ? `Version ${release.version} is available` : "Version updates"}</h2>
-          <p>{release ? `${release.prerelease ? "Pre-release" : "Release"} published ${date(release.published_at)}. ${release.supported ? "A compatible Linux package is ready." : "No update package for this platform yet."}` : `You are running the latest version, ${version}.`}</p>
-          <div className="release-list">
-            {(updates.releases || []).slice(0, 4).map((item: Obj) => <a key={item.tag} href={item.url} target="_blank" rel="noreferrer">{item.version}{item.prerelease && <span>Pre-release</span>}</a>)}
-            {!(updates.releases || []).length && <small>{updates.error || "Checking GitHub for published releases…"}</small>}
+      )}
+      {loaded && (
+      <section className="panel-card chart-panel">
+        <div className="panel-title">
+          <div>
+            <h3>Automation activity</h3>
+            <p>Runs completed and failed over the last 7 days, grouped by UTC day</p>
+          </div>
+          <div className="chart-legend">
+            <span>
+              <i className="swatch completed" />
+              {count(totals.completed)} completed
+            </span>
+            <span>
+              <i className="swatch failed" />
+              {count(totals.failed)} failed
+            </span>
           </div>
         </div>
-        <div className="release-controls">
-          <label>Update policy
-            <select value={updates.policy || "manual"} onChange={(e) => void updatePolicy(e.target.value)}>
-              <option value="manual">Manual updates</option>
-              <option value="automatic">Automatic updates</option>
-            </select>
-          </label>
-          <label>Release channel
-            <select value={beta ? "beta" : "stable"} onChange={(e) => void updateChannel(e.target.value)}>
-              <option value="stable">Stable releases</option>
-              <option value="beta">Beta releases</option>
-            </select>
-          </label>
-          {release && <button className="btn primary" disabled={updating || !release.supported} onClick={async () => { setUpdating(true); try { await applyUpdate(release.tag); } finally { setUpdating(false); } }}><ArrowDownRight size={15} />{updating ? "Updating…" : "Install update"}</button>}
-          <small>Automatic updates download and restart this Linux container. Back up /data first.</small>
+        <ActivityChart weekly={weekly} />
+        <div className="chart-foot">
+          <span>
+            <b>{count((totals.completed || 0) + (totals.failed || 0))}</b> runs
+          </span>
+          <span>
+            <b>{count(totals.findings)}</b> findings
+          </span>
+          <span>
+            <b>
+              {totals.runs_with_usage
+                ? compact(totals.tokens)
+                : "not reported"}
+            </b>{" "}
+            tokens
+          </span>
+          <span>
+            <b>{count(d.prs_last_7d)}</b> pull requests
+          </span>
         </div>
+        {Object.keys(severities).length > 0 && (
+        <div className="severity-row" aria-label="Findings by severity in the last 7 days">
+          <span className="severity-caption">By severity, last 7 days</span>
+          {["critical", "high", "medium", "low", "info"]
+            .filter((level) => severities[level])
+            .map((level) => (
+              <span key={level} className={`severity severity-${level}`}>
+                {level} {count(severities[level])}
+              </span>
+            ))}
+        </div>
+        )}
       </section>
+      )}
       <div className="section-heading">
         <div>
           <h2>Recent runs</h2>
@@ -1078,7 +1339,7 @@ function Overview({
           />
         )}
       </div>
-      <div className="bottom-grid">
+      {loaded && !steps.every((s) => s.ok) && (
         <div className="panel-card setup-card">
           <div className="panel-title">
             <div>
@@ -1086,40 +1347,11 @@ function Overview({
               <p>Three steps to your first review</p>
             </div>
             <span className="progress-chip">
-              {
-                [
-                  data.connections.length > 0,
-                  data.providers.length > 0,
-                  data.automations.length > 0,
-                ].filter(Boolean).length
-              }{" "}
-              / 3
+              {steps.filter((s) => s.ok).length} / {steps.length}
             </span>
           </div>
           <div className="steps">
-            {[
-              {
-                ok: data.connections.length > 0,
-                label: "Connect a code host",
-                sub: "GitHub, GitLab, Bitbucket, Forgejo or Gitea",
-                go: "connections" as Page,
-                icon: GitBranch,
-              },
-              {
-                ok: data.providers.length > 0,
-                label: "Add an AI provider",
-                sub: "OpenAI, Anthropic or Ollama",
-                go: "providers" as Page,
-                icon: Sparkles,
-              },
-              {
-                ok: data.automations.length > 0,
-                label: "Create an automation",
-                sub: "Choose repositories and actions",
-                go: "automations" as Page,
-                icon: Bot,
-              },
-            ].map((s, i) => (
+            {steps.map((s, i) => (
               <button
                 className={`step ${s.ok ? "done" : ""}`}
                 key={s.label}
@@ -1144,43 +1376,65 @@ function Overview({
             ))}
           </div>
         </div>
-        <div className="panel-card quick-card">
-          <div className="panel-title">
-            <div>
-              <h3>Quick links</h3>
-              <p>Manage your setup</p>
-            </div>
-            <div className="quick-spark">
-              <Command size={16} />
-            </div>
-          </div>
-          <button onClick={() => go("automations")}>
-            <Bot size={17} />
-            <span>
-              <b>Automations</b>
-              <small>Configure your workflows</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-          <button onClick={() => go("connections")}>
-            <Github size={17} />
-            <span>
-              <b>Connections</b>
-              <small>Manage code host access</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-          <button onClick={() => go("settings")}>
-            <SlidersHorizontal size={17} />
-            <span>
-              <b>Settings</b>
-              <small>Export configuration</small>
-            </span>
-            <ArrowRight size={15} />
-          </button>
-        </div>
-      </div>
+      )}
     </>
+  );
+}
+const dayLabel = (iso: string) =>
+  new Date(`${iso}T00:00:00Z`).toLocaleDateString(undefined, {
+    weekday: "short",
+    timeZone: "UTC",
+  });
+function ActivityChart({ weekly }: { weekly: Obj[] }) {
+  const peak = Math.max(
+    1,
+    ...weekly.map((day) => (day.completed || 0) + (day.failed || 0)),
+  );
+  const idle = weekly.every(
+    (day) => !(day.completed || 0) && !(day.failed || 0),
+  );
+  return (
+    <div
+      className="chart"
+      role="img"
+      aria-label={weekly
+        .map(
+          (day) =>
+            `${day.date}: ${day.completed || 0} completed, ${day.failed || 0} failed`,
+        )
+        .join("; ")}
+    >
+      {weekly.map((day) => {
+        const completed = day.completed || 0;
+        const failed = day.failed || 0;
+        const total = completed + failed;
+        return (
+          <div className="chart-col" key={day.date}>
+            <div className="chart-track">
+              <div
+                className={`chart-bar ${total ? "" : "quiet"}`}
+                style={{
+                  height: total ? `${Math.max(8, (total / peak) * 100)}%` : "3px",
+                }}
+                title={`${day.date}: ${completed} completed, ${failed} failed, ${day.findings || 0} findings`}
+              >
+                {failed > 0 && (
+                  <span className="bar-seg failed" style={{ flexGrow: failed }} />
+                )}
+                {completed > 0 && (
+                  <span
+                    className="bar-seg completed"
+                    style={{ flexGrow: completed }}
+                  />
+                )}
+              </div>
+            </div>
+            <small>{dayLabel(day.date)}</small>
+          </div>
+        );
+      })}
+      {idle && <p className="chart-empty">No runs in the last 7 days</p>}
+    </div>
   );
 }
 function Stat({
@@ -1190,7 +1444,7 @@ function Stat({
   icon: Icon,
 }: {
   label: string;
-  value: number | undefined;
+  value: number | string | undefined;
   hint: string;
   icon: any;
 }) {
@@ -1200,7 +1454,7 @@ function Stat({
         <span>{label.toUpperCase()}</span>
         <Icon size={17} />
       </div>
-      <strong>{count(value)}</strong>
+      <strong>{typeof value === "string" ? value : count(value)}</strong>
       <small>{hint}</small>
     </div>
   );
@@ -1764,11 +2018,65 @@ function SettingsPage({
   data,
   notice,
   reload,
+  version,
+  latest,
+  updating,
+  updatePolicy,
+  updateChannel,
+  applyUpdate,
 }: {
   data: any;
   notice: (s: string) => void;
   reload: () => Promise<void>;
+  version: string;
+  latest: Obj | null;
+  updating: boolean;
+  updatePolicy: (mode: string) => Promise<void>;
+  updateChannel: (channel: string) => Promise<void>;
+  applyUpdate: (tag: string) => Promise<void>;
 }) {
+  const beta = data.updates.channel === "beta";
+  const [checking, setChecking] = useState(false),
+    [checkError, setCheckError] = useState("");
+  const cancelQueuedUpdate = async () => {
+    try {
+      await api("/updates/cancel", "POST", {});
+      notice("The queued update was cancelled.");
+      await reload();
+    } catch (e) {
+      notice((e as Error).message);
+    }
+  };
+  const checkNow = async () => {
+    setChecking(true);
+    setCheckError("");
+    try {
+      const result = await api<Obj>("/updates/check", "POST", {});
+      if (result?.restarting) {
+        notice("Update installed. Reconnecting to Diffrook…");
+        window.setTimeout(() => window.location.reload(), 2500);
+        return;
+      }
+      notice(
+        result?.install_error
+          ? `GitHub was reached, but the automatic update failed: ${result.install_error}`
+          : result?.deferred
+            ? "GitHub was reached. An automation is running, so the update waits for it."
+            : result?.latest
+              ? `GitHub offers v${result.latest.version}; this instance runs v${result.current_version}`
+              : `v${result?.current_version} is the newest release on GitHub`,
+      );
+      await reload();
+    } catch (e) {
+      const message = (e as Error).message;
+      // A throttled click costs nothing and is nobody's mistake, so it is a
+      // status message rather than a failure.
+      if (/Try again in/i.test(message)) notice(message);
+      else setCheckError(message);
+    } finally {
+      setChecking(false);
+    }
+  };
   const exportConfig = () => {
     const sanitized = {
       automations: data.automations,
@@ -1826,10 +2134,6 @@ function SettingsPage({
               service.
             </p>
             <div className="settings-line">
-              <span>Version</span>
-              <b>Self-hosted</b>
-            </div>
-            <div className="settings-line">
               <span>Automations</span>
               <b>{data.automations.length}</b>
             </div>
@@ -1841,6 +2145,169 @@ function SettingsPage({
               <span>AI providers</span>
               <b>{data.providers.length}</b>
             </div>
+          </div>
+        </section>
+        <section className="panel-card setting-panel">
+          <div className="setting-icon">
+            <RefreshCw size={19} />
+          </div>
+          <div>
+            <h3>Updates</h3>
+            <p>
+              Diffrook checks GitHub releases every 15 minutes and offers the
+              newest one on your release channel.
+            </p>
+            <div className="settings-line">
+              <span>Current version</span>
+              <b>v{version}</b>
+            </div>
+            <div className="settings-line">
+              <span>Latest release on your channel</span>
+              <b>
+                {latest
+                  ? `v${latest.version}`
+                  : data.updates.error
+                    ? "Unknown"
+                    : data.updates.checked_at
+                      ? "Up to date"
+                      : "Not checked yet"}
+              </b>
+            </div>
+            {latest?.rolled_back && (
+              <div className="settings-line">
+                <span>Last attempt</span>
+                <b>v{latest.version} failed to start and was rolled back</b>
+              </div>
+            )}
+            {latest?.install_failures ? (
+              <div className="settings-line" role="alert">
+                <span>Failed installs</span>
+                <b>
+                  v{latest.version} failed to install {latest.install_failures} time(s);{" "}
+                  {latest.install_parked
+                    ? "automatic updates leave it alone until you retry"
+                    : data.updates.policy === "automatic"
+                      ? "it will be retried"
+                      : "install it again to retry"}
+                </b>
+              </div>
+            ) : null}
+            {data.updates.install_error && (
+              <div className="settings-line" role="alert">
+                <span>Last automatic update failed</span>
+                <b>
+                  v{data.updates.install_error.version ||
+                    String(data.updates.install_error.tag || "").replace(/^v/, "")}:{" "}
+                  {data.updates.install_error.message}
+                </b>
+              </div>
+            )}
+            {data.updates.pending_install && (
+              <div className="settings-line">
+                <span>Queued update</span>
+                <b>
+                  v{data.updates.pending_version ||
+                    String(data.updates.pending_install).replace(/^v/, "")} installs as soon as
+                  the running automations finish
+                </b>
+              </div>
+            )}
+            <div className="settings-line">
+              <span>Last release check</span>
+              <b>{date(data.updates.checked_at)}</b>
+            </div>
+            {data.updates.error && (
+              <div className="settings-line" role="alert">
+                <span>Last check failed</span>
+                <b>{data.updates.error}</b>
+              </div>
+            )}
+            {checkError && (
+              <div className="settings-line" role="alert">
+                <span>Check now failed</span>
+                <b>{checkError}</b>
+              </div>
+            )}
+            <button
+              className="btn secondary small"
+              onClick={() => void checkNow()}
+              disabled={checking}
+            >
+              {checking ? (
+                <LoaderCircle size={14} className="spin" />
+              ) : (
+                <RefreshCw size={14} />
+              )}{" "}
+              Check GitHub now
+            </button>
+            <div className="update-controls">
+              <label>
+                Update policy
+                <select
+                  value={data.updates.policy || "manual"}
+                  onChange={(e) => void updatePolicy(e.target.value)}
+                >
+                  <option value="manual">Manual (I approve each one)</option>
+                  <option value="automatic">
+                    Automatic (installed for me)
+                  </option>
+                </select>
+                <small>
+                  Automatic updates need a Linux container and run only when no
+                  automation is in progress.
+                </small>
+              </label>
+              <label>
+                Release channel
+                <select
+                  value={beta ? "beta" : "stable"}
+                  onChange={(e) => void updateChannel(e.target.value)}
+                >
+                  <option value="stable">Stable releases</option>
+                  <option value="beta">Beta releases</option>
+                </select>
+                <small>
+                  Beta follows pre-releases, so you test changes earlier.
+                </small>
+              </label>
+            </div>
+            {latest && (
+              <button
+                className="btn primary"
+                disabled={updating || !latest.supported}
+                onClick={() => void applyUpdate(latest.tag)}
+              >
+                <ArrowDownRight size={15} />
+                {updating
+                  ? "Installing…"
+                  : latest.supported
+                    ? `Install v${latest.version}`
+                    : latest.unsupported_reason || "No package for this platform"}
+              </button>
+            )}
+            {data.updates.pending_install && (
+              <button
+                className="btn secondary"
+                disabled={updating}
+                onClick={() => void cancelQueuedUpdate()}
+              >
+                Cancel the queued update to v{data.updates.pending_version ||
+                  String(data.updates.pending_install).replace(/^v/, "")}
+              </button>
+            )}
+            <p>
+              {data.updates.policy === "automatic"
+                ? "New releases download from GitHub, wait for running automations to finish, restart this container, and roll back if the new version fails to start. Back up your data volume first."
+                : "Installing an update waits for running automations, then restarts this container for a few seconds. A release that fails to start is rolled back."}
+            </p>
+            <a
+              className="text-btn"
+              href="https://github.com/Alexandre1116/diffrook/releases"
+              target="_blank"
+              rel="noreferrer"
+            >
+              All releases <ExternalLink size={14} />
+            </a>
           </div>
         </section>
         <section className="panel-card setting-panel">
@@ -1887,11 +2354,13 @@ function SettingsPage({
 
 function Modal({
   title,
+  eyebrow = "DIFFROOK CONFIGURATION",
   close,
   wide,
   children,
 }: {
   title: string;
+  eyebrow?: string;
   close: () => void;
   wide?: boolean;
   children: React.ReactNode;
@@ -1919,7 +2388,7 @@ function Modal({
       >
         <div className="modal-header">
           <div>
-            <div className="eyebrow">DIFFROOK CONFIGURATION</div>
+            <div className="eyebrow">{eyebrow}</div>
             <h2 id={titleId}>{title}</h2>
           </div>
           <button className="icon-btn" aria-label="Close dialog" onClick={close}>
@@ -2622,11 +3091,12 @@ function AutomationForm({
               rows={5}
               value={v.instructions}
               onChange={(e) => upd("instructions", e.target.value)}
-              placeholder="Focus on correctness, security, and user-visible regressions. Explain each finding with a file and line reference."
+              placeholder="Focus on correctness, security, and user-visible regressions. Cite the file and line for each finding. Skip style opinions and anything the diff cannot support."
             />
             <small>
-              Repository content is treated as untrusted input and cannot change
-              these instructions.
+              Short and specific works best: the model already reports only what
+              it can verify. Repository content stays untrusted input and cannot
+              change these instructions.
             </small>
           </label>
           <div className="number-grid">

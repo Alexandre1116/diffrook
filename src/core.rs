@@ -27,6 +27,9 @@ pub struct AppState {
     pub updates: Arc<tokio::sync::RwLock<Value>>,
     pub restart: tokio::sync::watch::Sender<bool>,
     pub update_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Set while a release check is in flight, so two administrators clicking
+    /// "check now" cannot spend the GitHub quota twice at once.
+    pub release_check_busy: Arc<std::sync::atomic::AtomicBool>,
     pub security: Arc<crate::security::SecurityConfig>,
     pub license: Arc<crate::licensing::License>,
     pub rate_limiter: Arc<tokio::sync::Mutex<crate::security::RateLimiter>>,
@@ -124,10 +127,11 @@ impl AppState {
             cancellations: Arc::new(tokio::sync::Mutex::new(Default::default())),
             login_failures: Arc::new(tokio::sync::Mutex::new(Default::default())),
             updates: Arc::new(tokio::sync::RwLock::new(
-                json!({"current_version":env!("CARGO_PKG_VERSION"),"releases":[],"checked_at":null,"error":null}),
+                json!({"current_version":env!("CARGO_PKG_VERSION"),"releases":[],"checked_at":null,"last_attempt":null,"error":null,"retry_after":null,"install_error":null}),
             )),
             restart,
             update_lock: Arc::new(tokio::sync::Mutex::new(())),
+            release_check_busy: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             security: Arc::new(security),
             license: Arc::new(license),
             rate_limiter: Arc::new(tokio::sync::Mutex::new(Default::default())),

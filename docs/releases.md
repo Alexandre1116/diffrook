@@ -130,11 +130,11 @@ docker compose up --build -d
 
 Preserve the existing Compose project name, data volume and instance configuration.
 Linux x86-64 and ARM64 installations may also explicitly install the matching
-package from the dashboard. The update archives keep license notices under
+package from Settings. The update archives keep license notices under
 `web/licenses/`, which older extractors accept. Archive checksum files are
 included in the GitHub release, and in-app updates verify GitHub's asset digest.
 From this version onward, Automatic updates only installs stable versions
-unless the dashboard's release channel is set to Beta releases. On the stable
+unless the release channel in Settings is set to Beta releases. On the stable
 channel, pre-releases are not offered; switch to the beta channel to install them.
 
 Validate login, company IdP allowlists, a representative automation and webhook

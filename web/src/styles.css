@@ -336,26 +336,6 @@ button:disabled {
 .crumb-slash {
   color: #bfc4ce;
 }
-.top-actions {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-.instance-pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border: 1px solid #e1e6ef;
-  background: #f5f7fb;
-  color: #617496;
-  border-radius: 99px;
-  padding: 6px 10px;
-  font-size: 10px;
-}
-.instance-pill .live-dot {
-  width: 6px;
-  height: 6px;
-}
 .icon-btn {
   border: 0;
   background: transparent;
@@ -531,7 +511,8 @@ button:disabled {
   margin-bottom: 34px;
 }
 .stat-card {
-  height: 103px;
+  /* A hint that wraps to two lines must not be cut off by a fixed box. */
+  min-height: 103px;
   background: #fff;
   border: 1px solid #e7eaf1;
   border-radius: 8px;
@@ -565,18 +546,6 @@ button:disabled {
   font-size: 10px;
   color: #7f899d;
   margin-top: 2px;
-}
-.stat-card.uptime > strong {
-  font-size: 15px;
-  letter-spacing: 0;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 15px;
-}
-.stat-card.uptime > strong .live-dot {
-  width: 8px;
-  height: 8px;
 }
 .section-heading {
   display: flex;
@@ -744,14 +713,11 @@ button:disabled {
 .row-arrow {
   color: #a7aebb;
 }
-.bottom-grid {
-  display: grid;
-  grid-template-columns: 1.2fr 0.8fr;
-  gap: 14px;
-  margin-top: 18px;
-}
 .panel-card {
   padding: 18px 20px;
+}
+.setup-card {
+  margin-top: 18px;
 }
 .panel-title {
   display: flex;
@@ -835,43 +801,6 @@ button:disabled {
 }
 .step-arrow {
   color: #a3aab9;
-}
-.quick-card > button {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  text-align: left;
-  padding: 11px 0;
-  border: 0;
-  border-top: 1px solid #edeff2;
-  background: none;
-  color: #75839b;
-}
-.quick-card > button > span {
-  display: grid;
-  gap: 3px;
-  flex: 1;
-}
-.quick-card > button b {
-  font-size: 10px;
-  color: #49576d;
-}
-.quick-card > button small {
-  font-size: 9px;
-  color: #848ea1;
-}
-.quick-card > button:hover b {
-  color: #2f69e8;
-}
-.quick-spark {
-  width: 27px;
-  height: 27px;
-  border-radius: 6px;
-  background: #f1f4fa;
-  color: #7a8cae;
-  display: grid;
-  place-items: center;
 }
 .empty {
   min-height: 195px;
@@ -2172,9 +2101,6 @@ button:disabled {
   .stat-card {
     padding: 14px;
   }
-  .bottom-grid {
-    grid-template-columns: 1fr 1fr;
-  }
   .resource-actions .btn {
     font-size: 0;
     gap: 0;
@@ -2270,9 +2196,6 @@ button:disabled {
   .stat-grid {
     grid-template-columns: repeat(2, 1fr);
   }
-  .bottom-grid {
-    grid-template-columns: 1fr;
-  }
   .automation-grid {
     grid-template-columns: 1fr;
   }
@@ -2367,20 +2290,13 @@ button:disabled {
   }
 }
 @media (max-width: 480px) {
-  .top-actions {
-    gap: 5px;
-  }
-  .instance-pill {
-    font-size: 0;
-    padding: 7px;
-  }
-  .instance-pill .live-dot {
-    width: 7px;
-    height: 7px;
-  }
   .content {
-    padding-left: 13px;
-    padding-right: 13px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .head-buttons .btn.primary {
+    padding: 0 11px;
+    font-size: 11px;
   }
   .page-head {
     gap: 9px;
@@ -2403,11 +2319,14 @@ button:disabled {
     width: 16px;
   }
   .stat-card {
-    height: 96px;
+    min-height: 96px;
     padding: 12px;
   }
   .stat-card > strong {
     font-size: 23px;
+  }
+  .head-buttons .btn {
+    white-space: nowrap;
   }
   .section-heading h2 {
     font-size: 14px;
@@ -2495,9 +2414,222 @@ button:disabled {
     padding-right: 7px;
   }
 }
-.release-panel{display:flex;align-items:center;justify-content:space-between;gap:32px;margin:24px 0;padding:24px 26px;border:1px solid var(--line);background:linear-gradient(120deg,#fff 0%,#f5f7fb 100%)}
-.release-copy{min-width:0}.release-copy h2{margin:8px 0 6px;font-size:21px;letter-spacing:-.03em}.release-copy p{max-width:700px;margin:0;color:var(--muted);font-size:13px;line-height:1.6}.release-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.release-list a{display:inline-flex;gap:7px;align-items:center;padding:5px 9px;border:1px solid var(--line);border-radius:7px;color:var(--ink);text-decoration:none;font:600 11px var(--mono)}.release-list a span{color:#65738e;font:600 9px var(--sans);text-transform:uppercase;letter-spacing:.04em}.release-list small{color:var(--muted)}.release-controls{width:230px;flex:none;display:grid;gap:10px}.release-controls label{display:grid;gap:6px;color:var(--muted);font-size:11px;font-weight:600}.release-controls select{width:100%}.release-controls>small{color:var(--muted);font-size:10px;line-height:1.5}
-@media(max-width:760px){.release-panel{align-items:stretch;flex-direction:column;gap:18px}.release-controls{width:auto}}
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 20px 0 18px;
+  padding: 14px 18px;
+  border: 1px solid #cfdcf6;
+  border-radius: 8px;
+  background: #f0f5ff;
+  color: #33415a;
+}
+.update-banner .text-btn {
+  white-space: nowrap;
+}
+.update-banner > svg {
+  color: #2f69e8;
+  flex: none;
+}
+.update-copy {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.update-copy b {
+  font:
+    700 13px Manrope,
+    sans-serif;
+  color: #2e3b52;
+}
+.update-copy small {
+  font-size: 10px;
+  color: #7f899d;
+}
+.chart-panel {
+  margin: 0 0 34px;
+}
+.chart-legend {
+  display: flex;
+  gap: 14px;
+  color: #6f7c92;
+  font:
+    9px "DM Mono",
+    monospace;
+  letter-spacing: 0.08em;
+}
+.chart-legend span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.swatch.completed {
+  background: #2f69e8;
+}
+.swatch.failed {
+  background: #cf6856;
+}
+.chart {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 10px;
+  height: 178px;
+}
+.chart-col {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 8px;
+}
+.chart-track {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.chart-bar {
+  width: 100%;
+  max-width: 46px;
+  display: flex;
+  flex-direction: column;
+  border-radius: 4px 4px 2px 2px;
+  overflow: hidden;
+  background: #edf1f8;
+}
+.bar-seg {
+  display: block;
+  width: 100%;
+}
+.bar-seg.completed {
+  background: #2f69e8;
+}
+.bar-seg.failed {
+  background: #cf6856;
+}
+.chart-col small {
+  text-align: center;
+  color: #6f7c92;
+  font:
+    9px "DM Mono",
+    monospace;
+  letter-spacing: 0.06em;
+}
+.chart-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  font-size: 11px;
+  color: #8794a9;
+  pointer-events: none;
+}
+.chart-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid #e4e8f0;
+  font-size: 10px;
+  color: #6f7c92;
+}
+.severity-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: 12px;
+}
+.severity-row .severity {
+  text-transform: capitalize;
+}
+.severity-caption {
+  color: #56637a;
+  font:
+    9px "DM Mono",
+    monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.chart-legend span {
+  white-space: nowrap;
+}
+.stat-loading {
+  min-height: 104px;
+  animation: pulse 1.4s ease-in-out infinite;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+.chart-foot b {
+  font:
+    700 12px Manrope,
+    sans-serif;
+  color: #2e3b52;
+  margin-right: 5px;
+}
+.update-controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.update-controls label {
+  display: grid;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #344054;
+}
+/* Same control the rest of the page draws: an unstyled select renders at the
+   browser's own size, which sat at a different height next to the buttons and
+   cut its own label off. */
+.update-controls select {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  border: 1px solid #e1e6ef;
+  border-radius: 5px;
+  background: #fff;
+  color: #303d50;
+  padding: 0 10px;
+  outline: none;
+  font-size: 11px;
+  transition:
+    border 0.15s,
+    box-shadow 0.15s;
+}
+.update-controls select:focus {
+  border-color: #7395e8;
+  box-shadow: 0 0 0 3px #5f84de18;
+}
+.update-controls small {
+  font-size: 10px;
+  font-weight: 400;
+  color: #76839a;
+  line-height: 1.5;
+}
+@media (max-width: 760px) {
+  .update-banner {
+    flex-wrap: wrap;
+  }
+  .update-copy {
+    flex: 1 1 100%;
+  }
+  .chart {
+    gap: 5px;
+    height: 150px;
+  }
+}
 
 .legal-links { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 16px; padding: 14px 8px; font-size: 12px; }
 .legal-links a { color: var(--muted, #8898ad); text-decoration: underline; text-underline-offset: 3px; }
