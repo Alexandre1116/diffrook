@@ -203,6 +203,18 @@ const date = (s?: string) =>
 const count = (n?: number) => (n ?? 0).toLocaleString();
 const statusClass = (s = "") => `status status-${s.toLowerCase()}`;
 const updateDismissKey = "diffrook.update-dismissed";
+const updatePromptKey = "diffrook.update-prompt-dismissed";
+// A browser remembers which release banners it already refused, so the offer
+// stays out of the way until a newer release appears.
+function readDismissedReleases(): Set<string> {
+  const tags = new Set<string>();
+  for (let i = 0; i < window.localStorage.length; i += 1) {
+    const key = window.localStorage.key(i);
+    if (key?.startsWith(`${updateDismissKey}.`))
+      tags.add(key.slice(updateDismissKey.length + 1));
+  }
+  return tags;
+}
 const compact = (n?: number) =>
   n && n >= 1000
     ? `${(n / 1000).toFixed(n >= 10000 ? 0 : 1)}k`
@@ -250,7 +262,8 @@ function App() {
   const accountMenuRef = useRef<HTMLDivElement>(null);
   const [showStarPrompt, setShowStarPrompt] = useState(false);
   const [updatePrompt, setUpdatePrompt] = useState<Obj | null>(null),
-    [updating, setUpdating] = useState(false);
+    [updating, setUpdating] = useState(false),
+    [dismissedTags, setDismissedTags] = useState<Set<string>>(readDismissedReleases);
   const reload = useCallback(async () => {
     if (!status?.authenticated) return;
     setBusy(true);
@@ -280,7 +293,10 @@ function App() {
     setNotice("Update installed. Reconnecting to Diffrook…");
     window.setTimeout(() => window.location.reload(), 2500);
   };
-  const release = data.updates.latest || null;
+  const release =
+    data.updates.latest && !dismissedTags.has(data.updates.latest.tag)
+      ? data.updates.latest
+      : null;
   const applyUpdate = async (tag: string) => {
     setUpdating(true);
     try {
@@ -307,13 +323,21 @@ function App() {
   };
   const dismissUpdate = (tag: string) => {
     window.localStorage.setItem(`${updateDismissKey}.${tag}`, "1");
+    setDismissedTags((current) => new Set([...current, tag]));
     setUpdatePrompt(null);
   };
-  // One popup per release: dismissed versions never ask again on this browser.
+  const closeUpdatePrompt = (tag: string) => {
+    window.localStorage.setItem(`${updatePromptKey}.${tag}`, "1");
+    setUpdatePrompt(null);
+  };
+  // One popup per release. The banner keeps the offer visible after the popup
+  // is closed, and neither comes back for a release this browser refused.
+  const promptShownFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!release?.supported || typeof window === "undefined") return;
-    if (window.localStorage.getItem(`${updateDismissKey}.${release.tag}`)) return;
-    setUpdatePrompt((current) => (current?.tag === release.tag ? current : release));
+    if (!release?.supported || promptShownFor.current === release.tag) return;
+    if (window.localStorage.getItem(`${updatePromptKey}.${release.tag}`)) return;
+    promptShownFor.current = release.tag;
+    setUpdatePrompt(release);
   }, [release]);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).has("sso_error")) {
@@ -849,7 +873,7 @@ function App() {
       {updatePrompt && (
         <Modal
           title={`Diffrook ${updatePrompt.version} is available`}
-          close={() => dismissUpdate(updatePrompt.tag)}
+          close={() => closeUpdatePrompt(updatePrompt.tag)}
         >
           <div className="form-stack">
             <p>
@@ -863,7 +887,7 @@ function App() {
               <button
                 className="btn secondary"
                 type="button"
-                onClick={() => dismissUpdate(updatePrompt.tag)}
+                onClick={() => closeUpdatePrompt(updatePrompt.tag)}
               >
                 Not now
               </button>
